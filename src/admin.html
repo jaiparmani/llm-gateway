@@ -1,11 +1,4 @@
-"""The keys page, served at /. One file, no framework, no CDN.
-
-Holds no secret itself — it gates on an admin token the viewer types, kept in
-localStorage and sent as a bearer header. Keys go in and are never shown again:
-every response it renders carries a masked form only.
-"""
-
-ADMIN_HTML = r"""<!doctype html>
+<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
@@ -158,7 +151,7 @@ ADMIN_HTML = r"""<!doctype html>
           <b>${esc(x.masked)}</b> ${x.next ? '<span class="tag" style="margin-left:7px">next</span>' : ""}
           <div class="dim" style="margin-top:3px">
             ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
-            ${x.last_rate_limited_at ? ' &middot; <span class="warn">rate limited ' + esc(x.last_rate_limited_at.slice(0,10)) + "</span>" : ""}
+            ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
           </div>
         </div>
         <button class="btn danger" data-del="${x.id}" style="font-size:11.5px;padding:5px 10px">Remove</button>
@@ -192,8 +185,8 @@ ADMIN_HTML = r"""<!doctype html>
       <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
       <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
     $("#recent").innerHTML = u.recent.length
-      ? `<tr><th>When</th><th>Client</th><th>Via</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
-        <tr><td>${esc(r.at.slice(0,16).replace("T"," "))}</td><td>${esc(r.client)}</td><td>${esc(r.transport)}</td>
+      ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
+        <tr><td>${esc(r.at.slice(0,16).replace("T"," "))}</td><td>${esc(r.client)}</td>
         <td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td>
         <td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "failed").slice(0,48))}</td></tr>`).join("")
       : `<tr><td class="dim">Nothing yet.</td></tr>`;
@@ -229,4 +222,3 @@ ADMIN_HTML = r"""<!doctype html>
   if (token) unlock(token); else { $("#gate").hidden = false; $("#tok").focus(); }
 })();
 </script>
-"""

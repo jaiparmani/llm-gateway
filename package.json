@@ -1,0 +1,25 @@
+{
+  "name": "llm-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "One place for the LLM API keys. A Cloudflare Worker that holds them, rotates them round-robin, and salvages whatever the model returns.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/gateway.test.ts",
+    "build:ui": "node scripts/build-ui.mjs",
+    "predeploy": "node scripts/build-ui.mjs",
+    "predev": "node scripts/build-ui.mjs",
+    "pretest": "node scripts/build-ui.mjs",
+    "db:init": "wrangler d1 execute llm-gateway --remote --file=schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260907.1",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

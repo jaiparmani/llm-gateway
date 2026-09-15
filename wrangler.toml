@@ -1,0 +1,22 @@
+name = "llm-gateway"
+main = "src/worker.ts"
+compatibility_date = "2026-09-01"
+
+# Secrets are set with:
+#   wrangler secret put ADMIN_TOKEN
+# The OpenRouter keys are NOT secrets here — they live in D1, added through the
+# admin page, so they can be rotated without a deploy.
+
+[vars]
+# Which model to ask for when a caller does not name one. The free pool routes
+# each call to a different model, which is why the salvaging exists.
+DEFAULT_MODEL = "openrouter/free"
+
+# Holds the key queue, the client tokens and the usage ledger. D1 rather than KV
+# because this writes on every call: D1's free plan allows 100k writes a day
+# where KV allows 1k, and a queue wants real SQL rather than read-modify-write
+# on a JSON blob two concurrent calls would clobber.
+[[d1_databases]]
+binding = "DB"
+database_name = "llm-gateway"
+database_id = "a0121438-a445-4224-b1d4-0d72ce4da75b"
