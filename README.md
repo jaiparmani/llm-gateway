@@ -8,33 +8,37 @@ of defensive code to survive whatever the model actually returned. Three copies
 means three places to rotate a key and three chances to get the hard part wrong.
 
 ```
-                    ┌──────────────────────────┐
-  brain ───REST────▶│                          │
-  (Cloudflare       │       llm-gateway        │───▶ OpenRouter
-   Worker)          │                          │
-                    │  keys · rotation         │
-  ToolBox ──gRPC───▶│  JSON salvage · retry    │
-  (Django)          │  per-client auth · usage │
-                    └──────────────────────────┘
-  anything else ────▶  REST or gRPC, same core
+  brain ──────────────┐
+  (Worker)            │     ┌──────────────────────────┐
+                      ├────▶│       llm-gateway        │────▶ OpenRouter
+  ToolBox ────────────┤     │    (Cloudflare Worker)   │
+  (Django)            │     │                          │
+                      │     │  keys · rotation         │
+  anything else ──────┘     │  JSON salvage · retry    │
+                            │  per-client auth · usage │
+                            └──────────────────────────┘
 ```
 
 The keys live here and nowhere else.
 
-## Why two transports
+## Why a Worker
 
-**gRPC** is the fast path: one HTTP/2 connection, binary frames, no JSON parse per
-call, and a generated client that fails at compile time rather than at 3am. For a
-Python service calling a Python service it is the obvious choice.
+It runs on Cloudflare's free plan with no card and **no cold start**, which matters
+more than it sounds: an LLM call already takes several seconds, and a free host that
+sleeps after fifteen idle minutes would put a minute in front of the first one and
+time the caller out.
 
-**REST** exists because gRPC is not universally reachable. Cloudflare Workers cannot
-speak it — no HTTP/2 trailers, no raw sockets — and `brain` is a Worker. A gRPC-only
-gateway would simply be unreachable from half of what needs it.
+Storage is **D1**, not KV, because this writes on every call — rotation and
+accounting. D1's free plan allows a hundred thousand writes a day where KV allows a
+thousand, and a queue wants real SQL rather than read-modify-write on a JSON blob
+that two concurrent calls would clobber.
 
-Both are thin adapters over [`gateway/service.py`](gateway/service.py). Every rule —
-rotation, retry, salvaging, accounting — is written once there, and a test asserts the
-two surfaces return the same answer to the same question, because two transports that
-disagree are worse than one transport.
+**REST only.** An earlier draft was a Python service with a gRPC surface alongside —
+it is in the git history at `783d4ab` if it is ever wanted back. gRPC is genuinely
+faster for service-to-service calls, but Cloudflare's edge does not proxy it and a
+Worker cannot act as a gRPC client either, so `brain` — the first thing that needed
+this — could never have reached it. A transport half the callers cannot use is not
+worth a second implementation to keep in sync.
 
 ## What it actually does for you
 
@@ -47,17 +51,17 @@ nothing to remember about which keys are "spent". The queue sorts itself out.
 **Surviving the free pool.** The default `openrouter/free` model routes every call to
 a different model. Some wrap the object in prose, some emit a `<think>` block
 containing its own braces, some ignore JSON mode entirely and fence the whole reply.
-[`salvage.py`](gateway/salvage.py) strips all of that and scans for balanced `{...}`
+[`salvage.ts`](src/salvage.ts) strips all of that and scans for balanced `{...}`
 spans by brace counting — string-aware, so a brace inside a value does not miscount —
 preferring the object that carries the key you asked for. A reply that still is not
 usable earns one retry with a correction, which often lands on a model that behaves.
 
 **Per-client tokens.** Each app gets its own, so usage is attributable and one app can
-be cut off without touching the others. Tokens are stored as hashes and compared in
-constant time; a token is shown once, at issue.
+be cut off without touching the others. Tokens are stored as hashes and looked up by
+hash; a token is shown once, at issue.
 
-**A usage ledger.** Every call records which client, which transport, which model
-actually served it, which key, and the token counts — visible at `/` and `/v1/usage`.
+**A usage ledger.** Every call records which client, which model actually served it,
+which key, and the token counts — visible at `/` and `/v1/usage`.
 
 ## Endpoints
 
@@ -71,34 +75,34 @@ actually served it, which key, and the token counts — visible at `/` and `/v1/
 | `GET /health` | Public. |
 | `GET /` | The admin UI: add keys, issue tokens, read the ledger. |
 
-gRPC mirrors it: `Chat`, `Json`, `Keys`, `Health` — see [`proto/llm.proto`](proto/llm.proto).
-Auth is the same bearer token, in call metadata.
-
 ## Running it
 
 ```bash
-make install
-cp .env.example .env    # set ADMIN_TOKEN: openssl rand -hex 32
-make serve
+npm install
+npx wrangler d1 create llm-gateway        # put the id in wrangler.toml
+npm run db:init                           # apply schema.sql
+npx wrangler secret put ADMIN_TOKEN       # openssl rand -hex 32
+npm run deploy
 ```
 
-REST on `:8080` with the admin UI at `/`, gRPC on `:50051`. Or:
+Open the Worker URL, unlock with your `ADMIN_TOKEN`, paste your keys, and issue a
+token per app. `npm run dev` runs it locally against a local D1.
+
+Without `ADMIN_TOKEN` set, the gateway still serves inference but refuses to let
+anyone add or remove a key — it disables management rather than failing open.
+
+## Migrating keys in
+
+If keys already live somewhere else, move them without ever putting one on screen:
 
 ```bash
-docker compose up --build
+GATEWAY_URL=https://llm-gateway.example.workers.dev ADMIN_TOKEN=... \
+  KV_NAMESPACE_ID=... node scripts/import-from-brain-kv.mjs
 ```
 
-Open `/`, unlock with your `ADMIN_TOKEN`, paste your keys, and issue a token per app.
-Keys can also be managed from the CLI:
-
-```bash
-python -m gateway key add sk-or-v1-... "laptop"
-python -m gateway key list
-python -m gateway client add brain
-```
-
-**Mount a volume.** The database holds the keys, so a container without `/data`
-mounted comes back up with an empty queue.
+It pipes them from Cloudflare KV straight into the gateway — not through a file, not
+through shell history — reports the masked forms it stored, and prints the command to
+delete the old copy once you have checked the count.
 
 ## Pointing something at it
 
@@ -115,26 +119,28 @@ The response shape is unchanged, so parsing, validation and retry logic on the c
 keep working untouched. Callers that want the hardening for free can move to
 `POST /v1/json` and delete their own copy of it.
 
-For gRPC, generate a client from `proto/llm.proto` and send the same token as
-`authorization` metadata.
+[`docs/migrating-toolbox.md`](docs/migrating-toolbox.md) has that diff written out for
+the Django side, unapplied.
 
 ## Security
 
 The one rule: **a key goes in and never comes back out.** Every API response and every
 pixel of the UI shows `sk-or-v1-abc...wxyz`, never a value — there is a test for it on
-each surface. Keys sit in the database in plaintext, exactly as they did in the Django
-table this replaces: anyone with database access can read them, which is why the
-database is gitignored, belongs on a volume you control, and should not be world-readable.
+each surface that returns anything.
 
-`ADMIN_TOKEN` gates every management endpoint. Leave it unset and the gateway still
-serves inference but refuses to let anyone add or remove a key.
+Keys sit in D1 in plaintext, exactly as they did in the Django table this replaces:
+anyone with access to that database can read them. D1 is private to your Cloudflare
+account, and nothing in this repo ever holds one.
+
+`ADMIN_TOKEN` gates every management endpoint, and is compared in constant time.
 
 ## Tests
 
 ```bash
-make test
+npm test
 ```
 
-43 tests: the salvaging, the rotation, the retry, both transports, and the two that
-matter most — REST and gRPC returning the same answer, and both sharing one key queue
-rather than each burning the front key.
+47 checks: the salvaging, the rotation, the retry, the auth, the accounting, and on
+every surface that returns anything, an assertion that a key is not in it. They run
+against real SQL — a `node:sqlite` stand-in for D1 — rather than a fake that agrees
+with whatever the code happens to do.
