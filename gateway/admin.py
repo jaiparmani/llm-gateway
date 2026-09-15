@@ -1,0 +1,232 @@
+"""The keys page, served at /. One file, no framework, no CDN.
+
+Holds no secret itself — it gates on an admin token the viewer types, kept in
+localStorage and sent as a bearer header. Keys go in and are never shown again:
+every response it renders carries a masked form only.
+"""
+
+ADMIN_HTML = r"""<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>llm-gateway</title>
+<style>
+  :root {
+    --bg:#08090c; --panel:#12141b; --panel-2:#171a23; --stroke:rgba(255,255,255,.08);
+    --stroke-2:rgba(255,255,255,.15); --text:#e8eaf0; --text-2:#9297a6; --text-3:#626879;
+    --accent:#5ee0c8; --accent-dim:rgba(94,224,200,.14); --amber:#f5b944; --rose:#fb7185;
+    --good:#4ade80; --r:12px;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:400 14.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+  button,input,textarea{font:inherit;color:inherit}
+  button{cursor:pointer;border:none;background:none}
+  code{font-family:var(--mono);font-size:.92em}
+  .wrap{max-width:860px;margin:0 auto;padding:44px 24px 90px}
+  h1{margin:0;font:680 25px/1.2 var(--sans);letter-spacing:-.018em}
+  .sub{margin:5px 0 30px;color:var(--text-2);font-size:13.5px}
+  .card{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;padding:22px;margin-bottom:14px}
+  .eyebrow{font:600 10.5px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin:0 0 14px}
+  .inp{width:100%;padding:10px 13px;border-radius:var(--r);background:#0d0f14;border:1px solid var(--stroke);color:var(--text);outline:none}
+  .inp:focus{border-color:rgba(94,224,200,.5);box-shadow:0 0 0 3px var(--accent-dim)}
+  textarea.inp{font-family:var(--mono);font-size:12.5px;resize:vertical}
+  .btn{padding:8px 15px;border-radius:9px;background:rgba(255,255,255,.06);border:1px solid var(--stroke-2);font-size:13px;font-weight:500}
+  .btn:hover{background:rgba(255,255,255,.1)}
+  .btn.primary{background:var(--accent);color:#04120f;border-color:transparent;font-weight:600}
+  .btn.primary:hover{background:#7aeed9}
+  .btn.danger{color:var(--rose);border-color:rgba(251,113,133,.3)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center}
+  .grow{flex:1;min-width:0}
+  .dim{color:var(--text-3);font-size:11.5px}
+  .muted{color:var(--text-2);font-size:13px}
+  .item{display:flex;gap:14px;align-items:center;padding:13px 15px;background:var(--panel-2);border:1px solid var(--stroke);border-radius:var(--r);margin-top:9px}
+  .item b{font-family:var(--mono);font-size:13px;font-weight:500}
+  .tag{font:600 9.5px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:4px 7px;border-radius:5px;background:var(--accent-dim);color:var(--accent)}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px}
+  .grid .k{font:600 10px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+  .grid .v{font:600 20px/1.3 var(--mono);margin-top:7px}
+  .gate{max-width:340px;margin:16vh auto;text-align:center}
+  .err{color:var(--rose);font-size:12.5px;min-height:18px;margin-top:9px}
+  .ok{color:var(--good)}
+  .warn{color:var(--amber)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font:600 10px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:0 0 9px}
+  td{padding:7px 0;border-top:1px solid var(--stroke);font-family:var(--mono);font-size:12px}
+  [hidden]{display:none!important}
+</style>
+
+<div class="wrap" id="gate" hidden>
+  <div class="gate">
+    <h1>llm-gateway</h1>
+    <p class="sub">One place for the OpenRouter keys. Everything else points here.</p>
+    <input id="tok" class="inp" type="password" placeholder="Admin token" autocomplete="off">
+    <div class="err" id="gateErr"></div>
+    <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
+  </div>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <div class="row" style="align-items:flex-start">
+    <div class="grow">
+      <h1>llm-gateway</h1>
+      <p class="sub" id="note"></p>
+    </div>
+    <button class="btn" id="lock">Lock</button>
+  </div>
+
+  <div class="card">
+    <p class="eyebrow">Add keys</p>
+    <p class="muted" style="margin:0 0 13px">
+      Paste one or more OpenRouter keys — newlines, commas or spaces between them. Each call takes the
+      key at the front of the queue and sends it to the back, so several keys multiply the free tier's
+      daily cap instead of spending one down.
+    </p>
+    <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="sk-or-v1-&#10;sk-or-v1-"></textarea>
+    <div class="row" style="margin-top:10px">
+      <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
+      <button class="btn primary" id="save">Save keys</button>
+    </div>
+    <div id="saveOut" style="margin-top:11px"></div>
+  </div>
+
+  <div class="card">
+    <p class="eyebrow">Rotation queue</p>
+    <div id="keys"></div>
+  </div>
+
+  <div class="card">
+    <p class="eyebrow">Clients</p>
+    <p class="muted" style="margin:0 0 13px">
+      Each app gets its own token, so usage is attributable and one app can be cut off without
+      touching the others. A token is shown once and stored only as a hash.
+    </p>
+    <div class="row">
+      <input id="clientName" class="inp grow" placeholder="brain, toolbox, …" autocomplete="off">
+      <button class="btn" id="mkClient">Issue token</button>
+    </div>
+    <div id="clientOut" style="margin-top:11px"></div>
+    <div id="clients"></div>
+  </div>
+
+  <div class="card">
+    <p class="eyebrow">Usage</p>
+    <div class="grid" id="summary"></div>
+    <div style="margin-top:20px;overflow-x:auto"><table id="recent"></table></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  let token = localStorage.getItem("gw.token") || "";
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { Authorization: "Bearer " + token, ...(options.body ? {"Content-Type":"application/json"} : {}) },
+    });
+    if (res.status === 401) { lock(); throw new Error("unauthorized"); }
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : null;
+    if (!res.ok) throw new Error(body?.detail?.skipped?.join?.("; ") || body?.error?.message || body?.detail || "request failed");
+    return body;
+  }
+
+  function lock() { token = ""; localStorage.removeItem("gw.token"); $("#app").hidden = true; $("#gate").hidden = false; }
+  async function unlock(candidate) {
+    token = (candidate || "").trim(); if (!token) return;
+    $("#gateErr").textContent = "";
+    try { await api("/v1/keys"); localStorage.setItem("gw.token", token); $("#gate").hidden = true; $("#app").hidden = false; await load(); }
+    catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "That token was rejected." : e.message; }
+  }
+  $("#unlock").onclick = () => unlock($("#tok").value);
+  $("#tok").onkeydown = (e) => { if (e.key === "Enter") unlock($("#tok").value); };
+  $("#lock").onclick = lock;
+
+  async function load() {
+    const k = await api("/v1/keys");
+    $("#note").textContent = k.note;
+    $("#keys").innerHTML = k.queue.length ? k.queue.map((x) => `
+      <div class="item">
+        <span style="width:16px;text-align:center;color:${x.next ? "var(--accent)" : "var(--text-3)"}">${x.next ? "&#9654;" : "&middot;"}</span>
+        <div class="grow">
+          <b>${esc(x.masked)}</b> ${x.next ? '<span class="tag" style="margin-left:7px">next</span>' : ""}
+          <div class="dim" style="margin-top:3px">
+            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
+            ${x.last_rate_limited_at ? ' &middot; <span class="warn">rate limited ' + esc(x.last_rate_limited_at.slice(0,10)) + "</span>" : ""}
+          </div>
+        </div>
+        <button class="btn danger" data-del="${x.id}" style="font-size:11.5px;padding:5px 10px">Remove</button>
+      </div>`).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
+
+    document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+      if (!confirm("Remove this key from the rotation?")) return;
+      try { await api("/v1/keys/" + b.dataset.del, { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
+    }));
+
+    const c = await api("/v1/clients");
+    $("#clients").innerHTML = c.clients.length ? c.clients.map((x) => `
+      <div class="item">
+        <div class="grow"><b>${esc(x.name)}</b>
+          <div class="dim" style="margin-top:3px">${x.calls} call${x.calls === 1 ? "" : "s"}${x.last_seen ? " &middot; last seen " + esc(x.last_seen.slice(0,10)) : " &middot; never used"}</div>
+        </div>
+        <button class="btn danger" data-revoke="${esc(x.name)}" style="font-size:11.5px;padding:5px 10px">Revoke</button>
+      </div>`).join("") : `<p class="dim" style="margin:12px 0 0">No clients yet.</p>`;
+
+    document.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {
+      if (!confirm(`Revoke "${b.dataset.revoke}"? It will stop being able to call the gateway immediately.`)) return;
+      try { await api("/v1/clients/" + encodeURIComponent(b.dataset.revoke), { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
+    }));
+
+    const u = await api("/v1/usage?limit=25");
+    const s = u.summary;
+    $("#summary").innerHTML = `
+      <div><div class="k">Calls</div><div class="v">${s.calls}</div></div>
+      <div><div class="k">Succeeded</div><div class="v ok">${s.ok}</div></div>
+      <div><div class="k">Failed</div><div class="v ${s.calls - s.ok ? "warn" : ""}">${s.calls - s.ok}</div></div>
+      <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
+      <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
+    $("#recent").innerHTML = u.recent.length
+      ? `<tr><th>When</th><th>Client</th><th>Via</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
+        <tr><td>${esc(r.at.slice(0,16).replace("T"," "))}</td><td>${esc(r.client)}</td><td>${esc(r.transport)}</td>
+        <td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td>
+        <td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "failed").slice(0,48))}</td></tr>`).join("")
+      : `<tr><td class="dim">Nothing yet.</td></tr>`;
+  }
+
+  $("#save").onclick = async () => {
+    const keys = $("#keyInput").value.trim(); if (!keys) return;
+    $("#save").disabled = true;
+    try {
+      const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim() }) });
+      $("#keyInput").value = ""; $("#keyLabel").value = "";
+      $("#saveOut").innerHTML = `<span class="ok" style="font-size:13px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}.</span>`
+        + (r.skipped.length ? `<div class="warn" style="font-size:12.5px;margin-top:6px">${r.skipped.map(esc).join("<br>")}</div>` : "");
+      await load();
+    } catch (e) { $("#saveOut").innerHTML = `<span style="color:var(--rose);font-size:13px">${esc(e.message)}</span>`; }
+    $("#save").disabled = false;
+  };
+
+  $("#mkClient").onclick = async () => {
+    const name = $("#clientName").value.trim(); if (!name) return;
+    try {
+      const r = await api("/v1/clients", { method: "POST", body: JSON.stringify({ name }) });
+      $("#clientName").value = "";
+      $("#clientOut").innerHTML = `<div class="item"><div class="grow">
+        <div class="dim">${esc(r.note)}</div>
+        <b style="display:block;margin-top:7px;color:var(--accent);word-break:break-all">${esc(r.token)}</b>
+      </div><button class="btn" id="copyTok">Copy</button></div>`;
+      $("#copyTok").onclick = () => navigator.clipboard.writeText(r.token);
+      await load();
+    } catch (e) { $("#clientOut").innerHTML = `<span style="color:var(--rose);font-size:13px">${esc(e.message)}</span>`; }
+  };
+
+  if (token) unlock(token); else { $("#gate").hidden = false; $("#tok").focus(); }
+})();
+</script>
+"""

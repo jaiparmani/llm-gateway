@@ -1,0 +1,83 @@
+// Wire contract for the gRPC surface.
+//
+// Mirrors the REST endpoints one for one, because both are thin adapters over
+// gateway/service.py. gRPC exists for service-to-service callers that make many
+// small calls and would rather not pay for TLS setup and JSON parsing on each
+// one; REST exists because not every caller can speak gRPC — Cloudflare Workers
+// cannot, which is exactly why this service offers both.
+syntax = "proto3";
+
+package llm.v1;
+
+option go_package = "github.com/jaiparmani/llm-gateway/gen/llm/v1;llmv1";
+
+service Llm {
+  // One completion, returned as text.
+  rpc Chat (ChatRequest) returns (ChatResponse);
+  // One completion salvaged into a JSON object, retried once on a bad reply.
+  rpc Json (JsonRequest) returns (JsonResponse);
+  // Key-queue health. Masked values only.
+  rpc Keys (KeysRequest) returns (KeysResponse);
+  rpc Health (HealthRequest) returns (HealthResponse);
+}
+
+message Message {
+  string role = 1;    // system | user | assistant
+  string content = 2;
+}
+
+message ChatRequest {
+  repeated Message messages = 1;
+  string model = 2;             // empty uses the gateway default
+  int32 max_tokens = 3;         // 0 means unset
+  bool json_object = 4;         // ask the provider for JSON mode
+}
+
+message ChatResponse {
+  string content = 1;
+  string model = 2;             // the model that ACTUALLY served it
+  int32 input_tokens = 3;
+  int32 output_tokens = 4;
+  string key_masked = 5;        // which key served it, masked
+}
+
+message JsonRequest {
+  repeated Message messages = 1;
+  string model = 2;
+  int32 max_tokens = 3;
+  string expect_key = 4;        // prefer an object carrying this key
+  int32 max_attempts = 5;       // 0 defaults to 2
+}
+
+message JsonResponse {
+  string json = 1;              // the salvaged object, serialised
+  string model = 2;
+  int32 input_tokens = 3;
+  int32 output_tokens = 4;
+  int32 attempts = 5;
+  string key_masked = 6;
+}
+
+message KeysRequest {}
+
+message KeyInfo {
+  string masked = 1;
+  string label = 2;
+  int64 uses = 3;
+  bool next = 4;                // serves the next call
+  string last_used_at = 5;
+  string last_rate_limited_at = 6;
+}
+
+message KeysResponse {
+  int32 configured = 1;
+  repeated KeyInfo queue = 2;
+  string note = 3;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  bool ok = 1;
+  int32 keys = 2;
+  string version = 3;
+}

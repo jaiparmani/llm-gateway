@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# The database holds the API keys in plaintext, exactly like the Django table it
+# replaces. It must never be committed.
+*.db
+*.db-wal
+*.db-shm
+.env
