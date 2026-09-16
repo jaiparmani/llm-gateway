@@ -107,9 +107,7 @@ export class Gateway {
         signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
       });
     } catch (e) {
-      throw wrap(
-        new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`),
-      );
+      throw new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`);
     }
 
     if (response.status === 429) {
@@ -120,20 +118,29 @@ export class Gateway {
       // The provider's own sentence rather than its JSON envelope, and redacted:
       // an upstream that echoes back the credential it rejected must not turn a
       // 401 into the one thing this service never lets out.
-      throw wrap(
-        new GatewayError(
+      throw new GatewayError(
           `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
-        ),
-      );
+        );
     }
 
     const payload = (await response.json()) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: { message?: { content?: string; reasoning?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       model?: string;
     };
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) throw wrap(new BadModelOutput("Upstream returned an empty message."));
+    const message = payload.choices?.[0]?.message;
+    // Reasoning models in the free pool sometimes spend the whole token budget
+    // thinking and return an empty `content` with the answer in `reasoning`.
+    // Taking the reasoning is worse than a clean answer and better than nothing.
+    const content = message?.content || message?.reasoning;
+    if (!content) {
+      throw new BadModelOutput(
+        `${payload.model ?? model} returned an empty message` +
+          (payload.usage?.completion_tokens
+            ? ` after ${payload.usage.completion_tokens} tokens — it likely spent the budget reasoning.`
+            : "."),
+      );
+    }
 
     return {
       content,
@@ -153,6 +160,13 @@ export class Gateway {
    * key back too and the next one serves the same request — a 429 does not
    * consume quota, so there is nothing to bench and nothing to remember about
    * which keys are "spent". The queue sorts itself out.
+   *
+   * A reply that arrives but is unusable — an empty message, most often a
+   * reasoning model that spent its whole budget thinking — also moves to the
+   * next key. That is not really about the key: `openrouter/free` routes each
+   * call to a different model, so the next key is the cheapest way to reach a
+   * different model, and one bad responder in the pool should not fail a
+   * request the pool as a whole can serve.
    */
   async chat(
     messages: Message[],
@@ -160,16 +174,15 @@ export class Gateway {
   ): Promise<Completion> {
     const keys = await this.store.keys();
     if (keys.length === 0) {
-      throw wrap(
-        new NoKeysConfigured(
+      throw new NoKeysConfigured(
           "No OpenRouter key is configured on the gateway. Add one at the admin page.",
-        ),
-      );
+        );
     }
 
     const model = opts.model || this.config.defaultModel;
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
+    let lastUnusable: BadModelOutput | null = null;
 
     for (const key of keys) {
       tried.push(key.masked);
@@ -184,11 +197,22 @@ export class Gateway {
           lastRateLimit = e;
           continue;
         }
+        if (e instanceof BadModelOutput) {
+          // The key worked; the model behind it did not. Spend the call and
+          // move on, so the next attempt lands on a different model.
+          await this.store.pushToBack(key.id, false);
+          lastUnusable = e;
+          continue;
+        }
         throw e;
       }
     }
 
-    throw lastRateLimit ?? wrap(new GatewayError("Every configured key was rejected."));
+    throw (
+      lastRateLimit ??
+      lastUnusable ??
+      new GatewayError("Every configured key was rejected.")
+    );
   }
 
   /**
@@ -221,11 +245,9 @@ export class Gateway {
       }
     }
 
-    throw wrap(
-      new BadModelOutput(
+    throw new BadModelOutput(
         `The model would not return usable JSON after ${maxAttempts} attempts: ${lastError?.message}`,
-      ),
-    );
+      );
   }
 
   /**
@@ -305,11 +327,6 @@ export class Gateway {
         : "No keys configured — every call will fail with 503 until one is added.",
     };
   }
-}
-
-/** Preserves the subclass's status/code through construction. */
-function wrap<T extends GatewayError>(e: T): T {
-  return e;
 }
 
 /**

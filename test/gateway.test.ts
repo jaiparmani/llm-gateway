@@ -131,6 +131,40 @@ const allSpent = await req("POST", "/v1/chat/completions", { messages: [{ role: 
 check("every key spent is 429 with a reset time",
   allSpent.status === 429 && allSpent.body.error.reset_at, allSpent.raw.slice(0, 200));
 
+// The free pool hands back empty replies: a reasoning model can spend its whole
+// token budget thinking and return nothing in `content`. That is the model's
+// fault, not the key's, and the next key reaches a different model.
+const empty = (model = "stub/thinker") => ({
+  status: 200,
+  body: { model, usage: { prompt_tokens: 5, completion_tokens: 700 }, choices: [{ message: { content: "" } }] },
+});
+
+seen.length = 0;
+script = [empty(), say("the next model managed it")];
+const recovered = await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
+check("an empty reply rotates to the next key instead of failing",
+  recovered.status === 200 && recovered.body.choices[0].message.content === "the next model managed it",
+  recovered.raw.slice(0, 200));
+check("both keys are reported as tried", recovered.body.x_gateway.keys_tried.length === 2, recovered.body.x_gateway);
+
+script = [empty(), empty(), empty()];
+const allEmpty = await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
+check("every model returning nothing is a clear 502, naming the model",
+  allEmpty.status === 502 && allEmpty.body.error.code === "bad_model_output"
+  && allEmpty.body.error.message.includes("stub/thinker"), allEmpty.raw.slice(0, 220));
+check("the message explains the token budget rather than just saying empty",
+  /reasoning|tokens/.test(allEmpty.body.error.message), allEmpty.body.error.message);
+
+// Some models leave `content` empty and put the answer in `reasoning`.
+script = [{
+  status: 200,
+  body: { model: "stub/reasoner", usage: { prompt_tokens: 5, completion_tokens: 40 },
+          choices: [{ message: { content: "", reasoning: "the answer is 42" } }] },
+}];
+const viaReasoning = await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
+check("an answer left in `reasoning` is used rather than discarded",
+  viaReasoning.body.choices?.[0]?.message?.content === "the answer is 42", viaReasoning.raw.slice(0, 200));
+
 console.log("\n── the OpenAI-shaped surface ──");
 
 script = [say("hello there")];
