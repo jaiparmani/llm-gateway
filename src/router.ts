@@ -35,7 +35,9 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     return json({ ok: true, keys: (await deps.store.keys()).length, version: "0.1.0" });
   }
 
-  if (path === "/" && method === "GET") {
+  // One file, two pages: the console and the chat. Both are the same document,
+  // which picks its tab from the path, so there is still only one asset to ship.
+  if ((path === "/" || path === "/chat") && method === "GET") {
     return new Response(ADMIN_HTML, {
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -145,6 +147,15 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         { added, skipped, note: added.length ? "Stored. A key is never shown again — only a masked form." : "Nothing stored." },
         added.length ? 201 : 400,
       );
+    }
+
+    // Probe one key by name, outside the rotation, so a typo is caught at the
+    // moment it is pasted rather than by a caller a week later.
+    const probeMatch = /^\/v1\/keys\/(\d+)\/test$/.exec(path);
+    if (probeMatch && method === "POST") {
+      const result = await deps.gateway.probe(Number(probeMatch[1]));
+      if (!result) return json({ error: { code: "not_found", message: "No key with that id." } }, 404);
+      return json(result);
     }
 
     const keyMatch = /^\/v1\/keys\/(\d+)$/.exec(path);

@@ -60,9 +60,22 @@ spans by brace counting — string-aware, so a brace inside a value does not mis
 preferring the object that carries the key you asked for. A reply that still is not
 usable earns one retry with a correction, which often lands on a model that behaves.
 
+**Testing a key on its own.** `POST /v1/keys/{id}/test` sends the smallest call the
+provider will take, using that one key and never falling through to the next. A typo
+is worth catching the moment it is pasted rather than a week later, when every caller
+has quietly been served by the other keys. A 429 counts as a pass — the provider only
+rate limits a key it recognises, so the key is good and merely spent.
+
 **Per-client tokens.** Each app gets its own, so usage is attributable and one app can
 be cut off without touching the others. Tokens are stored as hashes and looked up by
 hash; a token is shown once, at issue.
+
+**A chat page.** `/chat` is the same single HTML file as the console, on the same
+gateway, so there is somewhere to actually use the LLM rather than only administer it.
+It authenticates with a **client token, not the admin one** — it is a caller like any
+other, it shows up in the ledger under its own name, and nobody needs the admin token
+to have a conversation. Each reply says which model answered and which key served it,
+which the default pool makes worth knowing: it routes every call somewhere else.
 
 **A usage ledger.** Every call records which client, which model actually served it,
 which key, and the token counts — visible at `/` and `/v1/usage`.
@@ -74,10 +87,12 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 | `POST /v1/chat/completions` | **OpenAI-shaped.** An existing OpenRouter client moves here by changing one URL and one key. |
 | `POST /v1/json` | Salvages and validates server-side; returns a parsed object. |
 | `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. Admin token. Masked values only. |
+| `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
 | `GET /v1/clients` · `POST` · `DELETE /v1/clients/{name}` | Issue and revoke client tokens. Admin token. |
 | `GET /v1/usage` | Per-client and per-key accounting. Admin token. |
 | `GET /health` | Public. |
-| `GET /` | The admin UI: add keys, issue tokens, read the ledger. |
+| `GET /` | The console: add keys, test them, issue tokens, read the ledger. |
+| `GET /chat` | A chat page, on a client token, for actually using the thing. |
 
 ## Running it
 
@@ -89,8 +104,9 @@ npx wrangler secret put ADMIN_TOKEN       # openssl rand -hex 32
 npm run deploy
 ```
 
-Open the Worker URL, unlock with your `ADMIN_TOKEN`, paste your keys, and issue a
-token per app. `npm run dev` runs it locally against a local D1.
+Open the Worker URL, unlock with your `ADMIN_TOKEN`, paste your keys, press Test on
+each one, and issue a token per app. `/chat` takes one of those tokens if you want to
+talk to it. `npm run dev` runs it locally against a local D1.
 
 Without `ADMIN_TOKEN` set, the gateway still serves inference but refuses to let
 anyone add or remove a key — it disables management rather than failing open.
@@ -130,7 +146,9 @@ the Django side, unapplied.
 
 The one rule: **a key goes in and never comes back out.** Every API response and every
 pixel of the UI shows `sk-or-v1-abc...wxyz`, never a value — there is a test for it on
-each surface that returns anything.
+each surface that returns anything. That includes the surfaces that quote the provider:
+a provider is free to echo back the credential it just refused, so anything passing an
+upstream message through masks the key inside it first.
 
 Keys sit in D1 in plaintext, exactly as they did in the Django table this replaces:
 anyone with access to that database can read them. D1 is private to your Cloudflare
@@ -144,7 +162,7 @@ account, and nothing in this repo ever holds one.
 npm test
 ```
 
-47 checks: the salvaging, the rotation, the retry, the auth, the accounting, and on
+60 checks: the salvaging, the rotation, the retry, the auth, the accounting, and on
 every surface that returns anything, an assertion that a key is not in it. They run
 against real SQL — a `node:sqlite` stand-in for D1 — rather than a fake that agrees
 with whatever the code happens to do.

@@ -41,6 +41,16 @@ export interface Message {
   content: string;
 }
 
+/** What a single key looks like to the provider right now. Masked, always. */
+export interface ProbeResult {
+  /** True when the provider recognised the key — a spent key is still valid. */
+  ok: boolean;
+  status: "live" | "rate_limited" | "failed";
+  key: string;
+  message: string;
+  resetAt?: string | null;
+}
+
 export interface Completion {
   content: string;
   /** The model that ACTUALLY served it — the free pool differs per call. */
@@ -63,6 +73,16 @@ export interface GatewayConfig {
 export class Gateway {
   constructor(private store: Store, private config: GatewayConfig) {}
 
+  /** The provider headers for one key. The only place a key is written out. */
+  private headers(key: ApiKeyRow): Record<string, string> {
+    return {
+      Authorization: `Bearer ${key.key}`,
+      "Content-Type": "application/json",
+      ...(this.config.referer ? { "HTTP-Referer": this.config.referer } : {}),
+      ...(this.config.title ? { "X-Title": this.config.title } : {}),
+    };
+  }
+
   private async post(
     messages: Message[],
     key: ApiKeyRow,
@@ -82,17 +102,14 @@ export class Gateway {
     try {
       response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${key.key}`,
-          "Content-Type": "application/json",
-          ...(this.config.referer ? { "HTTP-Referer": this.config.referer } : {}),
-          ...(this.config.title ? { "X-Title": this.config.title } : {}),
-        },
+        headers: this.headers(key),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
       });
     } catch (e) {
-      throw wrap(new GatewayError(`Could not reach the upstream provider: ${(e as Error).message}`));
+      throw wrap(
+        new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`),
+      );
     }
 
     if (response.status === 429) {
@@ -100,8 +117,13 @@ export class Gateway {
       throw new RateLimited(message, resetAt);
     }
     if (!response.ok) {
+      // The provider's own sentence rather than its JSON envelope, and redacted:
+      // an upstream that echoes back the credential it rejected must not turn a
+      // 401 into the one thing this service never lets out.
       throw wrap(
-        new GatewayError(`Upstream returned ${response.status}: ${(await response.text()).slice(0, 300)}`),
+        new GatewayError(
+          `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
+        ),
       );
     }
 
@@ -206,6 +228,70 @@ export class Gateway {
     );
   }
 
+  /**
+   * Asks the provider whether one specific key works, with the smallest call it
+   * will accept — one word, one token back.
+   *
+   * Deliberately outside the rotation: it names the key, does not fall through
+   * to the next one, and does not move anything in the queue. A typo should be
+   * caught the moment it is pasted, not a week later when every caller has been
+   * quietly falling back to whichever key still answers.
+   *
+   * A 429 is a pass, not a failure — the provider only rate limits a key it
+   * recognises, so the key is good and merely spent.
+   *
+   * Null when there is no key with that id.
+   */
+  async probe(id: number): Promise<ProbeResult | null> {
+    const key = (await this.store.keys()).find((k) => k.id === id);
+    if (!key) return null;
+
+    let response: Response;
+    try {
+      response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
+        method: "POST",
+        headers: this.headers(key),
+        body: JSON.stringify({
+          model: this.config.defaultModel,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+        }),
+        signal: AbortSignal.timeout(Math.min(this.config.timeoutMs ?? 45_000, 15_000)),
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        status: "failed",
+        key: key.masked,
+        message: `Could not reach the provider: ${redact((e as Error).message, key)}`,
+      };
+    }
+
+    if (response.status === 429) {
+      const { resetAt } = await rateLimitDetails(response);
+      return {
+        ok: true,
+        status: "rate_limited",
+        key: key.masked,
+        resetAt,
+        message: resetAt
+          ? `Valid, but its quota is spent until ${resetAt.slice(0, 16).replace("T", " ")} UTC.`
+          : "Valid, but its quota is spent right now. Only a key the provider recognises gets a 429.",
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: "failed",
+        key: key.masked,
+        message: `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
+      };
+    }
+    // Content is not read on purpose: a model that answers with nothing under a
+    // one-token cap still proves the key authenticated.
+    return { ok: true, status: "live", key: key.masked, message: "The provider accepted this key." };
+  }
+
   /** Key queue health. Masked values only — nothing here can make a call. */
   async queueView(): Promise<Record<string, unknown>> {
     const keys = await this.store.publicKeys();
@@ -224,6 +310,29 @@ export class Gateway {
 /** Preserves the subclass's status/code through construction. */
 function wrap<T extends GatewayError>(e: T): T {
   return e;
+}
+
+/**
+ * The one rule, enforced on the way out: a key goes in and never comes back.
+ * Anything quoting the provider passes through here, because the provider is
+ * free to echo the credential it just refused.
+ */
+function redact(text: string, key: ApiKeyRow): string {
+  return text.split(key.key).join(key.masked);
+}
+
+/** The provider's own sentence where there is one, the raw body where not. */
+async function providerMessage(response: Response): Promise<string> {
+  const text = (await response.text()).slice(0, 400);
+  try {
+    const body = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
+    const message =
+      typeof body.error === "string" ? body.error : body.error?.message ?? body.message;
+    if (message) return String(message).slice(0, 300);
+  } catch {
+    // Not every provider answers a rejection in JSON.
+  }
+  return text.slice(0, 300) || response.statusText || "no detail given";
 }
 
 /** A sentence the caller can act on, plus when it is worth retrying. */

@@ -22,7 +22,9 @@ const stub = createServer(async (req, res) => {
   seen.push({ auth: req.headers.authorization ?? "", body: JSON.parse(Buffer.concat(chunks).toString()) });
   const next = script.shift() ?? { status: 200, body: { choices: [{ message: { content: "{}" } }] } };
   res.writeHead(next.status, { "content-type": "application/json" });
-  res.end(JSON.stringify(next.body));
+  // __KEY__ stands for whichever key this call actually carried, so a scripted
+  // reply can echo the credential back the way a real provider might.
+  res.end(JSON.stringify(next.body).split("__KEY__").join(seen.at(-1)!.auth.replace("Bearer ", "")));
 });
 await new Promise<void>((r) => stub.listen(0, r));
 const upstreamUrl = `http://127.0.0.1:${(stub.address() as { port: number }).port}/v1/chat/completions`;
@@ -145,6 +147,14 @@ script = [say('{"a":1}')];
 await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }], response_format: { type: "json_object" } }, brainToken);
 check("response_format is passed upstream", seen[0]!.body.response_format?.type === "json_object", seen[0]?.body);
 
+script = [{ status: 401, body: { error: { message: "No auth credentials found for __KEY__" } } }];
+const refused = await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
+check("a refusal carries the provider's sentence, not its JSON envelope",
+  refused.status === 502 && refused.body.error.message.includes("No auth credentials")
+  && !refused.body.error.message.includes("{"), refused.raw.slice(0, 200));
+check("a provider echoing the key back never reaches the caller",
+  !["a", "b", "c"].some((n) => refused.raw.includes(keyOf(n))), refused.raw.slice(0, 200));
+
 const badBody = await req("POST", "/v1/chat/completions", { messages: [] }, brainToken);
 check("an empty message list is rejected", badBody.status === 400, badBody.raw);
 const badRole = await req("POST", "/v1/chat/completions", { messages: [{ role: "wizard", content: "x" }] }, brainToken);
@@ -190,6 +200,11 @@ check("the ledger never holds a key", !usage.raw.includes(keyOf("a")), "leaked")
 
 check("health is public", (await handle(new Request("http://x/health"), deps)).status === 200);
 check("the admin page is served", (await handle(new Request("http://x/"), deps)).status === 200);
+check("the chat page is the same document, served at /chat", await (async () => {
+  const a = await handle(new Request("http://x/"), deps);
+  const b = await handle(new Request("http://x/chat"), deps);
+  return b.status === 200 && (await b.text()) === (await a.text());
+})());
 check("an unknown route is a clean 404", (await req("GET", "/v1/nope")).status === 404);
 
 const noAdmin = await handle(
@@ -197,6 +212,47 @@ const noAdmin = await handle(
   { ...deps, adminToken: "" },
 );
 check("with no ADMIN_TOKEN set, management is disabled rather than open", noAdmin.status === 503);
+
+console.log("\n── testing one key on its own ──");
+
+const before = (await req("GET", "/v1/keys")).body.queue as any[];
+const idB = before.find((k) => k.masked === mask(keyOf("b")))!.id;
+const usesBefore = before.find((k) => k.id === idB)!.uses;
+
+seen.length = 0;
+script = [say("pong")];
+const live = await req("POST", `/v1/keys/${idB}/test`);
+check("a key tests live when the provider accepts it",
+  live.status === 200 && live.body.ok === true && live.body.status === "live", live.raw);
+check("the test uses that one key, not the rotation",
+  keysUsed().length === 1 && keysUsed()[0] === keyOf("b"), keysUsed().map(mask));
+check("the test asks for the smallest completion the provider will take",
+  seen[0]!.body.max_tokens === 1, seen[0]?.body);
+check("the result names the key masked, never whole",
+  live.body.key === mask(keyOf("b")) && !live.raw.includes(keyOf("b")), "leaked");
+
+const after = (await req("GET", "/v1/keys")).body.queue as any[];
+check("a test does not move the key in the rotation or count as a call",
+  after[0]!.masked === before[0]!.masked && after.find((k) => k.id === idB)!.uses === usesBefore,
+  { front: [before[0]!.masked, after[0]!.masked], uses: [usesBefore, after.find((k) => k.id === idB)!.uses] });
+
+script = [rateLimited()];
+const spent = await req("POST", `/v1/keys/${idB}/test`);
+check("a 429 means the key is valid and merely spent, not broken",
+  spent.body.ok === true && spent.body.status === "rate_limited" && Boolean(spent.body.resetAt), spent.raw);
+
+script = [{ status: 401, body: { error: { message: `No auth credentials found for ${keyOf("b")}` } } }];
+const dead = await req("POST", `/v1/keys/${idB}/test`);
+check("a rejected key reports the provider's own words",
+  dead.body.ok === false && dead.body.status === "failed" && dead.body.message.includes("No auth credentials"),
+  dead.raw);
+check("a provider that echoes the key back still does not leak it",
+  !dead.raw.includes(keyOf("b")) && dead.raw.includes(mask(keyOf("b"))), dead.raw);
+
+check("testing a key that is not there is a clean 404",
+  (await req("POST", "/v1/keys/99999/test")).status === 404);
+check("testing a key needs the admin token, not a client token",
+  (await req("POST", `/v1/keys/${idB}/test`, undefined, brainToken)).status === 401);
 
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");

@@ -19,7 +19,7 @@
   code{font-family:var(--mono);font-size:.92em}
   .wrap{max-width:860px;margin:0 auto;padding:44px 24px 90px}
   h1{margin:0;font:680 25px/1.2 var(--sans);letter-spacing:-.018em}
-  .sub{margin:5px 0 30px;color:var(--text-2);font-size:13.5px}
+  .sub{margin:5px 0 22px;color:var(--text-2);font-size:13.5px}
   .card{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;padding:22px;margin-bottom:14px}
   .eyebrow{font:600 10.5px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin:0 0 14px}
   .inp{width:100%;padding:10px 13px;border-radius:var(--r);background:#0d0f14;border:1px solid var(--stroke);color:var(--text);outline:none}
@@ -30,6 +30,7 @@
   .btn.primary{background:var(--accent);color:#04120f;border-color:transparent;font-weight:600}
   .btn.primary:hover{background:#7aeed9}
   .btn.danger{color:var(--rose);border-color:rgba(251,113,133,.3)}
+  .btn.small{font-size:11.5px;padding:5px 10px}
   .btn:disabled{opacity:.45;cursor:not-allowed}
   .row{display:flex;gap:10px;align-items:center}
   .grow{flex:1;min-width:0}
@@ -42,73 +43,144 @@
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px}
   .grid .k{font:600 10px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
   .grid .v{font:600 20px/1.3 var(--mono);margin-top:7px}
-  .gate{max-width:340px;margin:16vh auto;text-align:center}
+  .gate{max-width:340px;margin:12vh auto;text-align:center}
   .err{color:var(--rose);font-size:12.5px;min-height:18px;margin-top:9px}
   .ok{color:var(--good)}
   .warn{color:var(--amber)}
+  .bad{color:var(--rose)}
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   th{text-align:left;font:600 10px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:0 0 9px}
   td{padding:7px 0;border-top:1px solid var(--stroke);font-family:var(--mono);font-size:12px}
+  .nav{display:flex;gap:2px;align-items:center;margin:0 0 20px;border-bottom:1px solid var(--stroke)}
+  .nav button{padding:9px 14px;font-size:13.5px;font-weight:500;color:var(--text-2);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .nav button:hover{color:var(--text)}
+  .nav button[aria-current]{color:var(--text);border-bottom-color:var(--accent)}
+  .probe{margin-top:5px;font-size:11.5px}
+  .turn{margin-top:16px}
+  .turn:first-child{margin-top:0}
+  .who{font:600 10px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
+  .bubble{background:var(--panel-2);border:1px solid var(--stroke);border-radius:var(--r);padding:12px 15px;white-space:pre-wrap;overflow-wrap:anywhere}
+  .turn.you .bubble{background:#0d0f14}
+  .turn.trouble .bubble{border-color:rgba(251,113,133,.28);color:var(--text-2)}
+  .turn .meta{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 12px}
   [hidden]{display:none!important}
 </style>
 
-<div class="wrap" id="gate" hidden>
-  <div class="gate">
-    <h1>llm-gateway</h1>
-    <p class="sub">One place for the OpenRouter keys. Everything else points here.</p>
-    <input id="tok" class="inp" type="password" placeholder="Admin token" autocomplete="off">
-    <div class="err" id="gateErr"></div>
-    <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
-  </div>
-</div>
-
-<div class="wrap" id="app" hidden>
+<div class="wrap">
   <div class="row" style="align-items:flex-start">
     <div class="grow">
       <h1>llm-gateway</h1>
-      <p class="sub" id="note"></p>
+      <p class="sub" id="note">One place for the OpenRouter keys. Everything else points here.</p>
     </div>
-    <button class="btn" id="lock">Lock</button>
+    <button class="btn" id="lock" hidden>Lock</button>
   </div>
 
-  <div class="card">
-    <p class="eyebrow">Add keys</p>
-    <p class="muted" style="margin:0 0 13px">
-      Paste one or more OpenRouter keys — newlines, commas or spaces between them. Each call takes the
-      key at the front of the queue and sends it to the back, so several keys multiply the free tier's
-      daily cap instead of spending one down.
-    </p>
-    <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="sk-or-v1-&#10;sk-or-v1-"></textarea>
-    <div class="row" style="margin-top:10px">
-      <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
-      <button class="btn primary" id="save">Save keys</button>
+  <nav class="nav">
+    <button data-view="console">Console</button>
+    <button data-view="chat">Chat</button>
+  </nav>
+
+  <!-- ── console ─────────────────────────────────────────────────────────── -->
+  <div id="view-console" hidden>
+    <div id="gate" hidden>
+      <div class="gate">
+        <p class="muted" style="margin:0 0 12px">Unlock with the admin token to manage keys and clients.</p>
+        <input id="tok" class="inp" type="password" placeholder="Admin token" autocomplete="off">
+        <div class="err" id="gateErr"></div>
+        <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
+      </div>
     </div>
-    <div id="saveOut" style="margin-top:11px"></div>
-  </div>
 
-  <div class="card">
-    <p class="eyebrow">Rotation queue</p>
-    <div id="keys"></div>
-  </div>
+    <div id="app" hidden>
+      <div class="card">
+        <p class="eyebrow">Add keys</p>
+        <p class="muted" style="margin:0 0 13px">
+          Paste one or more OpenRouter keys — newlines, commas or spaces between them. Each call takes the
+          key at the front of the queue and sends it to the back, so several keys multiply the free tier's
+          daily cap instead of spending one down.
+        </p>
+        <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="sk-or-v1-&#10;sk-or-v1-"></textarea>
+        <div class="row" style="margin-top:10px">
+          <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
+          <button class="btn primary" id="save">Save keys</button>
+        </div>
+        <div id="saveOut" style="margin-top:11px"></div>
+      </div>
 
-  <div class="card">
-    <p class="eyebrow">Clients</p>
-    <p class="muted" style="margin:0 0 13px">
-      Each app gets its own token, so usage is attributable and one app can be cut off without
-      touching the others. A token is shown once and stored only as a hash.
-    </p>
-    <div class="row">
-      <input id="clientName" class="inp grow" placeholder="brain, toolbox, …" autocomplete="off">
-      <button class="btn" id="mkClient">Issue token</button>
+      <div class="card">
+        <p class="eyebrow">Rotation queue</p>
+        <p class="muted" style="margin:0 0 13px">
+          Test asks the provider about that one key alone, outside the rotation — a typo is worth finding
+          now rather than a week later, when every caller has quietly been served by the others.
+        </p>
+        <div id="keys"></div>
+      </div>
+
+      <div class="card">
+        <p class="eyebrow">Clients</p>
+        <p class="muted" style="margin:0 0 13px">
+          Each app gets its own token, so usage is attributable and one app can be cut off without
+          touching the others. A token is shown once and stored only as a hash.
+        </p>
+        <div class="row">
+          <input id="clientName" class="inp grow" placeholder="brain, toolbox, …" autocomplete="off">
+          <button class="btn" id="mkClient">Issue token</button>
+        </div>
+        <div id="clientOut" style="margin-top:11px"></div>
+        <div id="clients"></div>
+      </div>
+
+      <div class="card">
+        <p class="eyebrow">Usage</p>
+        <div class="grid" id="summary"></div>
+        <div style="margin-top:20px;overflow-x:auto"><table id="recent"></table></div>
+      </div>
     </div>
-    <div id="clientOut" style="margin-top:11px"></div>
-    <div id="clients"></div>
   </div>
 
-  <div class="card">
-    <p class="eyebrow">Usage</p>
-    <div class="grid" id="summary"></div>
-    <div style="margin-top:20px;overflow-x:auto"><table id="recent"></table></div>
+  <!-- ── chat ────────────────────────────────────────────────────────────── -->
+  <div id="view-chat" hidden>
+    <div class="card" id="chatGate" hidden>
+      <p class="eyebrow">Client token</p>
+      <p class="muted" style="margin:0 0 13px">
+        This page talks to the gateway exactly the way any other app does — over
+        <code>POST /v1/chat/completions</code> with a client token, not the admin one. Issue one in the
+        Console tab; it is shown once, at issue.
+      </p>
+      <div class="row">
+        <input id="clientTok" class="inp grow" type="password" placeholder="lgw_…" autocomplete="off">
+        <button class="btn primary" id="chatUnlock">Use it</button>
+      </div>
+      <div class="err" id="chatGateErr"></div>
+    </div>
+
+    <div id="chatApp" hidden>
+      <div class="card">
+        <div class="row">
+          <input id="model" class="inp grow" spellcheck="false" autocomplete="off"
+                 placeholder="Model — blank asks for the gateway default">
+          <button class="btn" id="newChat">New chat</button>
+          <button class="btn" id="chatLock">Forget token</button>
+        </div>
+        <p class="dim" style="margin:9px 0 0">
+          The default pool routes every call to a different model, so each reply says which one actually
+          answered and which key served it.
+        </p>
+      </div>
+
+      <div class="card" id="logCard">
+        <div id="log"></div>
+      </div>
+
+      <div class="card">
+        <textarea id="composer" class="inp" rows="3" spellcheck="false"
+                  placeholder="Say something. Enter sends, Shift+Enter is a newline."></textarea>
+        <div class="row" style="margin-top:10px">
+          <span class="dim grow" id="chatStatus"></span>
+          <button class="btn primary" id="send">Send</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -116,6 +188,7 @@
 (() => {
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const when = (s) => String(s ?? "").slice(0, 16).replace("T", " ");
   let token = localStorage.getItem("gw.token") || "";
 
   async function api(path, options = {}) {
@@ -130,12 +203,35 @@
     return body;
   }
 
-  function lock() { token = ""; localStorage.removeItem("gw.token"); $("#app").hidden = true; $("#gate").hidden = false; }
+  // ── which page ────────────────────────────────────────────────────────────
+  let view = "console";
+  function show(next, push) {
+    view = next === "chat" ? "chat" : "console";
+    $("#view-console").hidden = view !== "console";
+    $("#view-chat").hidden = view !== "chat";
+    document.querySelectorAll("[data-view]").forEach((b) => {
+      if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    });
+    if (push) history.pushState({}, "", view === "chat" ? "/chat" : "/");
+    if (view === "chat") drawChat();
+  }
+  document.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => show(b.dataset.view, true)));
+  window.onpopstate = () => show(location.pathname.replace(/\/+$/, "") === "/chat" ? "chat" : "console", false);
+
+  // ── console ───────────────────────────────────────────────────────────────
+  function lock() {
+    token = ""; localStorage.removeItem("gw.token");
+    $("#app").hidden = true; $("#gate").hidden = false; $("#lock").hidden = true;
+  }
   async function unlock(candidate) {
     token = (candidate || "").trim(); if (!token) return;
     $("#gateErr").textContent = "";
-    try { await api("/v1/keys"); localStorage.setItem("gw.token", token); $("#gate").hidden = true; $("#app").hidden = false; await load(); }
-    catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "That token was rejected." : e.message; }
+    try {
+      await api("/v1/keys");
+      localStorage.setItem("gw.token", token);
+      $("#gate").hidden = true; $("#app").hidden = false; $("#lock").hidden = false;
+      await load();
+    } catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "That token was rejected." : e.message; }
   }
   $("#unlock").onclick = () => unlock($("#tok").value);
   $("#tok").onkeydown = (e) => { if (e.key === "Enter") unlock($("#tok").value); };
@@ -153,9 +249,24 @@
             ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
             ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
           </div>
+          <div class="probe" data-probe="${x.id}" hidden></div>
         </div>
-        <button class="btn danger" data-del="${x.id}" style="font-size:11.5px;padding:5px 10px">Remove</button>
+        <button class="btn small" data-test="${x.id}">Test</button>
+        <button class="btn danger small" data-del="${x.id}">Remove</button>
       </div>`).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
+
+    document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
+      const out = document.querySelector('[data-probe="' + b.dataset.test + '"]');
+      b.disabled = true; out.hidden = false; out.className = "probe dim"; out.textContent = "Asking the provider…";
+      try {
+        const r = await api("/v1/keys/" + b.dataset.test + "/test", { method: "POST" });
+        const tone = r.status === "live" ? "ok" : r.status === "rate_limited" ? "warn" : "bad";
+        const word = r.status === "live" ? "Live" : r.status === "rate_limited" ? "Rate limited" : "Failed";
+        out.className = "probe " + tone;
+        out.textContent = word + " — " + r.message;
+      } catch (e) { out.className = "probe bad"; out.textContent = "Could not run the test: " + e.message; }
+      b.disabled = false;
+    }));
 
     document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
       if (!confirm("Remove this key from the rotation?")) return;
@@ -168,7 +279,7 @@
         <div class="grow"><b>${esc(x.name)}</b>
           <div class="dim" style="margin-top:3px">${x.calls} call${x.calls === 1 ? "" : "s"}${x.last_seen ? " &middot; last seen " + esc(x.last_seen.slice(0,10)) : " &middot; never used"}</div>
         </div>
-        <button class="btn danger" data-revoke="${esc(x.name)}" style="font-size:11.5px;padding:5px 10px">Revoke</button>
+        <button class="btn danger small" data-revoke="${esc(x.name)}">Revoke</button>
       </div>`).join("") : `<p class="dim" style="margin:12px 0 0">No clients yet.</p>`;
 
     document.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {
@@ -186,7 +297,7 @@
       <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
     $("#recent").innerHTML = u.recent.length
       ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
-        <tr><td>${esc(r.at.slice(0,16).replace("T"," "))}</td><td>${esc(r.client)}</td>
+        <tr><td>${esc(when(r.at))}</td><td>${esc(r.client)}</td>
         <td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td>
         <td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "failed").slice(0,48))}</td></tr>`).join("")
       : `<tr><td class="dim">Nothing yet.</td></tr>`;
@@ -198,10 +309,10 @@
     try {
       const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim() }) });
       $("#keyInput").value = ""; $("#keyLabel").value = "";
-      $("#saveOut").innerHTML = `<span class="ok" style="font-size:13px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}.</span>`
+      $("#saveOut").innerHTML = `<span class="ok" style="font-size:13px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}. Test one to be sure the provider takes it.</span>`
         + (r.skipped.length ? `<div class="warn" style="font-size:12.5px;margin-top:6px">${r.skipped.map(esc).join("<br>")}</div>` : "");
       await load();
-    } catch (e) { $("#saveOut").innerHTML = `<span style="color:var(--rose);font-size:13px">${esc(e.message)}</span>`; }
+    } catch (e) { $("#saveOut").innerHTML = `<span class="bad" style="font-size:13px">${esc(e.message)}</span>`; }
     $("#save").disabled = false;
   };
 
@@ -213,12 +324,124 @@
       $("#clientOut").innerHTML = `<div class="item"><div class="grow">
         <div class="dim">${esc(r.note)}</div>
         <b style="display:block;margin-top:7px;color:var(--accent);word-break:break-all">${esc(r.token)}</b>
-      </div><button class="btn" id="copyTok">Copy</button></div>`;
+      </div><button class="btn" id="useTok">Use in chat</button><button class="btn" id="copyTok">Copy</button></div>`;
       $("#copyTok").onclick = () => navigator.clipboard.writeText(r.token);
+      $("#useTok").onclick = () => { setClientToken(r.token); show("chat", true); };
       await load();
-    } catch (e) { $("#clientOut").innerHTML = `<span style="color:var(--rose);font-size:13px">${esc(e.message)}</span>`; }
+    } catch (e) { $("#clientOut").innerHTML = `<span class="bad" style="font-size:13px">${esc(e.message)}</span>`; }
   };
 
-  if (token) unlock(token); else { $("#gate").hidden = false; $("#tok").focus(); }
+  // ── chat ──────────────────────────────────────────────────────────────────
+  // A turn carries what it was answered with, because the free pool answers
+  // each call with a different model and it is worth seeing which.
+  let clientToken = localStorage.getItem("gw.client") || "";
+  let turns = [];
+  let busy = false;
+
+  $("#model").value = localStorage.getItem("gw.model") || "";
+  $("#model").oninput = () => localStorage.setItem("gw.model", $("#model").value.trim());
+
+  function setClientToken(next) {
+    clientToken = (next || "").trim();
+    if (clientToken) localStorage.setItem("gw.client", clientToken); else localStorage.removeItem("gw.client");
+    drawChat();
+  }
+
+  function drawChat() {
+    $("#chatGate").hidden = !!clientToken;
+    $("#chatApp").hidden = !clientToken;
+    if (!clientToken) { $("#clientTok").value = ""; return; }
+    $("#logCard").hidden = turns.length === 0;
+    $("#log").innerHTML = turns.map((t) => `
+      <div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}">
+        <div class="who">${t.role === "user" ? "You" : t.trouble ? "Gateway" : "Assistant"}</div>
+        <div class="bubble">${esc(t.content)}</div>
+        ${t.model || t.key ? `<div class="meta dim">
+          ${t.model ? "<span>" + esc(t.model) + "</span>" : ""}
+          ${t.key ? "<span>key " + esc(t.key) + "</span>" : ""}
+          ${t.tried > 1 ? "<span>" + t.tried + " keys tried</span>" : ""}
+        </div>` : ""}
+      </div>`).join("");
+    $("#log").scrollIntoView({ block: "end" });
+  }
+
+  /** What actually goes upstream: the real turns, never the gateway's apologies. */
+  function conversation() {
+    return turns.filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content }));
+  }
+
+  /** A sentence someone can act on, rather than the error object. */
+  function explain(status, payload) {
+    const code = payload?.error?.code;
+    const message = payload?.error?.message || "";
+    if (status === 401) return "That client token was rejected. Issue a fresh one in the Console tab.";
+    if (code === "rate_limited") {
+      const at = payload?.error?.reset_at;
+      return "Every key in the rotation is out of quota" + (at ? ", until " + when(at) + " UTC." : " right now.")
+        + " Add another key in the Console tab, or come back after that.";
+    }
+    if (code === "no_keys_configured") return "No OpenRouter key is in the rotation, so there is nothing to call. Add one in the Console tab.";
+    if (code === "bad_model_output") return "The model returned nothing the gateway could use. Sending it again often lands on a different model in the free pool, which usually behaves.";
+    if (code === "validation_failed") return message;
+    if (code === "upstream_error") return message + "\nIf a key is being refused, the Console tab can test each one on its own.";
+    return message || ("The gateway returned " + status + " with no explanation.");
+  }
+
+  function setBusy(next) {
+    busy = next;
+    $("#send").disabled = next;
+    $("#chatStatus").textContent = next ? "Waiting on the model…" : "";
+  }
+
+  async function send() {
+    if (busy) return;
+    const text = $("#composer").value.trim(); if (!text || !clientToken) return;
+    turns.push({ role: "user", content: text });
+    $("#composer").value = "";
+    drawChat();
+    setBusy(true);
+
+    const body = { messages: conversation() };
+    const model = $("#model").value.trim();
+    if (model) body.model = model;
+
+    try {
+      const res = await fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + clientToken, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const text2 = await res.text();
+      let payload = null;
+      try { payload = text2 ? JSON.parse(text2) : null; } catch { /* a proxy in the way, not the gateway */ }
+      if (!res.ok || !payload) {
+        turns.push({ role: "assistant", trouble: true, content: explain(res.status, payload) });
+        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "That client token was rejected."; return; }
+      } else {
+        turns.push({
+          role: "assistant",
+          content: payload.choices?.[0]?.message?.content ?? "",
+          model: payload.model,
+          key: payload.x_gateway?.key,
+          tried: payload.x_gateway?.keys_tried?.length ?? 1,
+        });
+      }
+    } catch (e) {
+      turns.push({ role: "assistant", trouble: true, content: "The gateway could not be reached: " + e.message });
+    }
+    setBusy(false);
+    drawChat();
+  }
+
+  $("#chatUnlock").onclick = () => { $("#chatGateErr").textContent = ""; setClientToken($("#clientTok").value); };
+  $("#clientTok").onkeydown = (e) => { if (e.key === "Enter") $("#chatUnlock").click(); };
+  $("#chatLock").onclick = () => setClientToken("");
+  $("#newChat").onclick = () => { turns = []; drawChat(); };
+  $("#send").onclick = send;
+  $("#composer").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+
+  // ── start ─────────────────────────────────────────────────────────────────
+  show(location.pathname.replace(/\/+$/, "") === "/chat" ? "chat" : "console", false);
+  if (token) unlock(token); else { $("#gate").hidden = false; if (view === "console") $("#tok").focus(); }
 })();
 </script>
