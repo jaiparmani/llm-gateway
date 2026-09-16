@@ -21,6 +21,10 @@ means three places to rotate a key and three chances to get the hard part wrong.
 
 The keys live here and nowhere else.
 
+Live at <https://llm-gateway.brain-store.workers.dev>. Its first caller is
+[brain](https://github.com/jaiparmani/brain-store), which holds a client token and no
+provider key at all.
+
 ## Why a Worker
 
 It runs on Cloudflare's free plan with no card and **no cold start**, which matters
