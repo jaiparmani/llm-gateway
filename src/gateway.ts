@@ -41,6 +41,16 @@ export interface Message {
   content: string;
 }
 
+/** What a single key looks like to the provider right now. Masked, always. */
+export interface ProbeResult {
+  /** True when the provider recognised the key — a spent key is still valid. */
+  ok: boolean;
+  status: "live" | "rate_limited" | "failed";
+  key: string;
+  message: string;
+  resetAt?: string | null;
+}
+
 export interface Completion {
   content: string;
   /** The model that ACTUALLY served it — the free pool differs per call. */
@@ -63,6 +73,16 @@ export interface GatewayConfig {
 export class Gateway {
   constructor(private store: Store, private config: GatewayConfig) {}
 
+  /** The provider headers for one key. The only place a key is written out. */
+  private headers(key: ApiKeyRow): Record<string, string> {
+    return {
+      Authorization: `Bearer ${key.key}`,
+      "Content-Type": "application/json",
+      ...(this.config.referer ? { "HTTP-Referer": this.config.referer } : {}),
+      ...(this.config.title ? { "X-Title": this.config.title } : {}),
+    };
+  }
+
   private async post(
     messages: Message[],
     key: ApiKeyRow,
@@ -82,17 +102,12 @@ export class Gateway {
     try {
       response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${key.key}`,
-          "Content-Type": "application/json",
-          ...(this.config.referer ? { "HTTP-Referer": this.config.referer } : {}),
-          ...(this.config.title ? { "X-Title": this.config.title } : {}),
-        },
+        headers: this.headers(key),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
       });
     } catch (e) {
-      throw wrap(new GatewayError(`Could not reach the upstream provider: ${(e as Error).message}`));
+      throw new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`);
     }
 
     if (response.status === 429) {
@@ -100,18 +115,32 @@ export class Gateway {
       throw new RateLimited(message, resetAt);
     }
     if (!response.ok) {
-      throw wrap(
-        new GatewayError(`Upstream returned ${response.status}: ${(await response.text()).slice(0, 300)}`),
-      );
+      // The provider's own sentence rather than its JSON envelope, and redacted:
+      // an upstream that echoes back the credential it rejected must not turn a
+      // 401 into the one thing this service never lets out.
+      throw new GatewayError(
+          `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
+        );
     }
 
     const payload = (await response.json()) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: { message?: { content?: string; reasoning?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       model?: string;
     };
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) throw wrap(new BadModelOutput("Upstream returned an empty message."));
+    const message = payload.choices?.[0]?.message;
+    // Reasoning models in the free pool sometimes spend the whole token budget
+    // thinking and return an empty `content` with the answer in `reasoning`.
+    // Taking the reasoning is worse than a clean answer and better than nothing.
+    const content = message?.content || message?.reasoning;
+    if (!content) {
+      throw new BadModelOutput(
+        `${payload.model ?? model} returned an empty message` +
+          (payload.usage?.completion_tokens
+            ? ` after ${payload.usage.completion_tokens} tokens — it likely spent the budget reasoning.`
+            : "."),
+      );
+    }
 
     return {
       content,
@@ -131,6 +160,13 @@ export class Gateway {
    * key back too and the next one serves the same request — a 429 does not
    * consume quota, so there is nothing to bench and nothing to remember about
    * which keys are "spent". The queue sorts itself out.
+   *
+   * A reply that arrives but is unusable — an empty message, most often a
+   * reasoning model that spent its whole budget thinking — also moves to the
+   * next key. That is not really about the key: `openrouter/free` routes each
+   * call to a different model, so the next key is the cheapest way to reach a
+   * different model, and one bad responder in the pool should not fail a
+   * request the pool as a whole can serve.
    */
   async chat(
     messages: Message[],
@@ -138,16 +174,15 @@ export class Gateway {
   ): Promise<Completion> {
     const keys = await this.store.keys();
     if (keys.length === 0) {
-      throw wrap(
-        new NoKeysConfigured(
+      throw new NoKeysConfigured(
           "No OpenRouter key is configured on the gateway. Add one at the admin page.",
-        ),
-      );
+        );
     }
 
     const model = opts.model || this.config.defaultModel;
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
+    let lastUnusable: BadModelOutput | null = null;
 
     for (const key of keys) {
       tried.push(key.masked);
@@ -162,11 +197,22 @@ export class Gateway {
           lastRateLimit = e;
           continue;
         }
+        if (e instanceof BadModelOutput) {
+          // The key worked; the model behind it did not. Spend the call and
+          // move on, so the next attempt lands on a different model.
+          await this.store.pushToBack(key.id, false);
+          lastUnusable = e;
+          continue;
+        }
         throw e;
       }
     }
 
-    throw lastRateLimit ?? wrap(new GatewayError("Every configured key was rejected."));
+    throw (
+      lastRateLimit ??
+      lastUnusable ??
+      new GatewayError("Every configured key was rejected.")
+    );
   }
 
   /**
@@ -199,11 +245,73 @@ export class Gateway {
       }
     }
 
-    throw wrap(
-      new BadModelOutput(
+    throw new BadModelOutput(
         `The model would not return usable JSON after ${maxAttempts} attempts: ${lastError?.message}`,
-      ),
-    );
+      );
+  }
+
+  /**
+   * Asks the provider whether one specific key works, with the smallest call it
+   * will accept — one word, one token back.
+   *
+   * Deliberately outside the rotation: it names the key, does not fall through
+   * to the next one, and does not move anything in the queue. A typo should be
+   * caught the moment it is pasted, not a week later when every caller has been
+   * quietly falling back to whichever key still answers.
+   *
+   * A 429 is a pass, not a failure — the provider only rate limits a key it
+   * recognises, so the key is good and merely spent.
+   *
+   * Null when there is no key with that id.
+   */
+  async probe(id: number): Promise<ProbeResult | null> {
+    const key = (await this.store.keys()).find((k) => k.id === id);
+    if (!key) return null;
+
+    let response: Response;
+    try {
+      response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
+        method: "POST",
+        headers: this.headers(key),
+        body: JSON.stringify({
+          model: this.config.defaultModel,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+        }),
+        signal: AbortSignal.timeout(Math.min(this.config.timeoutMs ?? 45_000, 15_000)),
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        status: "failed",
+        key: key.masked,
+        message: `Could not reach the provider: ${redact((e as Error).message, key)}`,
+      };
+    }
+
+    if (response.status === 429) {
+      const { resetAt } = await rateLimitDetails(response);
+      return {
+        ok: true,
+        status: "rate_limited",
+        key: key.masked,
+        resetAt,
+        message: resetAt
+          ? `Valid, but its quota is spent until ${resetAt.slice(0, 16).replace("T", " ")} UTC.`
+          : "Valid, but its quota is spent right now. Only a key the provider recognises gets a 429.",
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: "failed",
+        key: key.masked,
+        message: `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
+      };
+    }
+    // Content is not read on purpose: a model that answers with nothing under a
+    // one-token cap still proves the key authenticated.
+    return { ok: true, status: "live", key: key.masked, message: "The provider accepted this key." };
   }
 
   /** Key queue health. Masked values only — nothing here can make a call. */
@@ -221,9 +329,27 @@ export class Gateway {
   }
 }
 
-/** Preserves the subclass's status/code through construction. */
-function wrap<T extends GatewayError>(e: T): T {
-  return e;
+/**
+ * The one rule, enforced on the way out: a key goes in and never comes back.
+ * Anything quoting the provider passes through here, because the provider is
+ * free to echo the credential it just refused.
+ */
+function redact(text: string, key: ApiKeyRow): string {
+  return text.split(key.key).join(key.masked);
+}
+
+/** The provider's own sentence where there is one, the raw body where not. */
+async function providerMessage(response: Response): Promise<string> {
+  const text = (await response.text()).slice(0, 400);
+  try {
+    const body = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
+    const message =
+      typeof body.error === "string" ? body.error : body.error?.message ?? body.message;
+    if (message) return String(message).slice(0, 300);
+  } catch {
+    // Not every provider answers a rejection in JSON.
+  }
+  return text.slice(0, 300) || response.statusText || "no detail given";
 }
 
 /** A sentence the caller can act on, plus when it is worth retrying. */
