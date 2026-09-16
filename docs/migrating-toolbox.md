@@ -1,110 +1,64 @@
 # Pointing ToolBox at the gateway
 
-ToolBox (`jaiparmani/ToolBoxWebServices`) already does everything this gateway does,
-in `toolboxservices/llm/client.py`: key queue, rotation, salvaging, retry. This is the
-diff that hands those jobs over — **without touching the five `call_json` call sites**
-in `expenses/services.py` and `insights/services.py`.
+**Applied.** `jaiparmani/ToolBoxWebServices`, branch `feature/llm-gateway`, commit
+`5febda5`. Not merged and not deployed — this is what it does and how to finish or
+undo it.
 
-Nothing here has been applied. It is written for a live app on `feature/test`, so read
-it before running it.
+## What changed
 
-## Step 1 — issue ToolBox a token
+Three files, and none of the call sites.
 
-On the gateway:
+`_post()` in `llm/client.py` picks a different URL and a different bearer when the
+gateway is configured. That is the whole switch, and it is small because the gateway
+answers in OpenAI's response shape: `extract_json`, the retry loop, the `validate`
+callbacks and all five `call_json` sites in `expenses/services.py` and
+`insights/services.py` are untouched.
+
+`_candidate_keys()` no longer raises when the key table is empty — with the gateway
+configured there is nothing to queue locally, so it yields one placeholder to drive a
+single pass through the retry loop and lets `_post()` route it out.
+
+Two gateway-specific conditions get their own errors, because both are configuration
+and a generic upstream error hides the fix:
+
+- **401** → `LLMNotConfigured`, naming `LLM_GATEWAY_TOKEN`
+- **503** → `LLMError`, saying the keys need adding on the gateway, not here
+
+## Finishing it
+
+Issue ToolBox a client token — on the gateway's Console tab, or:
 
 ```bash
-python -m gateway client add toolbox
+curl -s -X POST https://llm-gateway.brain-store.workers.dev/v1/clients \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"toolbox"}'
 ```
 
-Copy the `lgw_…` token. It is shown once.
+Then set two variables wherever PythonAnywhere holds this app's environment — the
+WSGI config file, typically:
 
-## Step 2 — two settings
-
-```diff
-  # toolboxservices/settings.py
-- OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '')
-  OPENROUTER_MODEL = os.environ.get('OPENROUTER_MODEL', 'openrouter/free')
-+ # The gateway holds the keys now. This is ToolBox's client token, not a provider key.
-+ LLM_GATEWAY_URL = os.environ.get('LLM_GATEWAY_URL', '')
-+ LLM_GATEWAY_TOKEN = os.environ.get('LLM_GATEWAY_TOKEN', '')
-+ # Kept so a stored key still works if the gateway is ever unreachable.
-+ OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '')
+```
+LLM_GATEWAY_URL=https://llm-gateway.brain-store.workers.dev
+LLM_GATEWAY_TOKEN=lgw_...
 ```
 
-## Step 3 — one function in `llm/client.py`
+Reload the web app. `LLM_GATEWAY_TOKEN` is ToolBox's client token, **not** an
+OpenRouter key, and cannot be used as one.
 
-The gateway speaks OpenAI's response shape, so `_post` needs only a different URL and
-a different bearer. Everything below it — `extract_json`, `call_json`, the retry, the
-`LLMRateLimited` handling — keeps working unchanged.
+## What stays, deliberately
 
-```diff
-- OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-+ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-+
-+
-+ def _endpoint_and_key(api_key):
-+     """Prefer the gateway; fall back to a locally stored key.
-+
-+     The gateway owns the keys, the rotation and the daily cap. A stored key is
-+     the escape hatch for the gateway being down, not the normal path.
-+     """
-+     url = getattr(settings, 'LLM_GATEWAY_URL', '')
-+     token = getattr(settings, 'LLM_GATEWAY_TOKEN', '')
-+     if url and token:
-+         return url.rstrip('/') + '/v1/chat/completions', token
-+     return OPENROUTER_URL, api_key
-```
-
-and in `_post`:
-
-```diff
-  def _post(messages, api_key, model, timeout, max_tokens):
-+     url, bearer = _endpoint_and_key(api_key)
-      body = { ... }
-      try:
-          response = requests.post(
--             OPENROUTER_URL,
-+             url,
-              headers={
--                 "Authorization": f"Bearer {api_key}",
-+                 "Authorization": f"Bearer {bearer}",
-                  "Content-Type": "application/json",
-              },
-```
-
-## Step 4 — let `_candidate_keys` yield when the gateway is configured
-
-Today `_candidate_keys()` raises `LLMNotConfigured` when no key is stored. With the
-gateway there is nothing to store, so it must not raise:
-
-```diff
-  def _candidate_keys():
-      ...
-      if not candidates:
-+         # The gateway carries the keys; one placeholder drives one pass through
-+         # the loop, and the real rotation happens on the other side.
-+         if getattr(settings, 'LLM_GATEWAY_URL', '') and getattr(settings, 'LLM_GATEWAY_TOKEN', ''):
-+             return [(None, None)]
-          raise LLMNotConfigured(...)
-```
-
-## What this leaves in place, deliberately
-
-- The `OpenRouterKey` table, admin and management command. Empty in normal operation,
-  but a place to drop a key back in if the gateway is unreachable.
-- `extract_json` and `call_json`. The gateway salvages too, but ToolBox's own copy
-  costs nothing and means a gateway change cannot break expense parsing.
-- All five `call_json` call sites. Untouched.
-
-## The fuller migration, when you want it
-
-Once this has run for a while, `POST /v1/json` replaces most of `client.py`: send the
-messages and `expect_key`, get a parsed object back. That deletes `extract_json`, the
-retry loop and the key queue from ToolBox entirely — about 200 lines — and leaves
-`call_json` as an HTTP call plus the caller's `validate`. Worth doing only after the
-gateway has earned the trust.
+The `OpenRouterKey` table, its admin, the management command and the
+`OPENROUTER_API_KEY` fallback. They are the escape hatch, not dead weight: unset
+`LLM_GATEWAY_URL` and ToolBox is exactly where it started, with its stored keys still
+working. Emptying that table is a later cleanup, once the gateway has earned it.
 
 ## Rollback
 
-Unset `LLM_GATEWAY_URL`. `_endpoint_and_key` falls back to the stored keys and ToolBox
-is exactly where it was.
+Unset `LLM_GATEWAY_URL` and reload. One variable, no deploy, no migration.
+
+## The fuller migration, later
+
+`POST /v1/json` replaces most of `client.py`: send the messages and `expect_key`, get
+a parsed object back. That deletes `extract_json`, the retry loop and the key queue
+from ToolBox — around 200 lines — leaving `call_json` as an HTTP call plus the
+caller's `validate`. Worth doing only once the thin version has run for a while.
