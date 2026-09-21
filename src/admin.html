@@ -233,7 +233,17 @@
     if (res.status === 401) { lock(); throw new Error("unauthorized"); }
     const text = await res.text();
     const body = text ? JSON.parse(text) : null;
-    if (!res.ok) throw new Error(body?.detail?.skipped?.join?.("; ") || body?.error?.message || body?.detail || "request failed");
+    // /v1/keys returns {added, skipped, note} at the top level on a 400 (a
+    // key that does not match the provider's shape, or is already stored) —
+    // not nested under `detail`, which nothing here has ever actually sent.
+    // Checking the real shape first is what surfaces "does not look like a
+    // Google Gemini key…" instead of the useless generic fallback below.
+    if (!res.ok) throw new Error(
+      (Array.isArray(body?.skipped) && body.skipped.length ? body.skipped.join("; ") : null)
+      || body?.error?.message
+      || body?.detail
+      || "request failed",
+    );
     return body;
   }
 
