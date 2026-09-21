@@ -37,8 +37,13 @@ export const PROVIDERS: Record<string, ProviderDef> = {
     // everything else here, so nothing in gateway.ts had to change for it.
     upstreamUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     defaultModel: "gemini-2.0-flash",
-    keyShape: /^AIza[A-Za-z0-9_-]{35}$/,
-    keyHint: "AIza…",
+    // Google has been rolling new AI Studio keys out with an "AQ." prefix
+    // since mid-2026, replacing the legacy "AIza" format — both still get
+    // issued depending on the account, so both are accepted here. AQ. keys
+    // vary in length more than AIza's fixed 39 chars, hence the open-ended
+    // minimum rather than an exact count.
+    keyShape: /^(AIza[A-Za-z0-9_-]{35}|AQ\.[A-Za-z0-9_.-]{20,})$/,
+    keyHint: "AIza… or AQ.…",
   },
   groq: {
     id: "groq",

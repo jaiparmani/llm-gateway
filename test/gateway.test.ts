@@ -415,6 +415,14 @@ const queue2 = await req2("GET", "/v1/keys");
 check("the queue reports which provider each key belongs to",
   new Set(queue2.body.queue.map((k: any) => k.provider)).size === 2, queue2.body.queue.map((k: any) => k.provider));
 
+// Google started issuing AI Studio keys with this prefix in place of AIza
+// partway through 2026 — both formats are live simultaneously depending on
+// the account, so both must be accepted. Added last so it does not shift
+// which key rotation lands on above.
+const addedGeminiAq = await req2("POST", "/v1/keys", { keys: "AQ." + "b".repeat(30), provider: "gemini" });
+check("a newer AQ.-prefixed Gemini key is also accepted, not just the legacy AIza format",
+  addedGeminiAq.status === 201 && addedGeminiAq.body.added[0].provider === "gemini", addedGeminiAq.raw);
+
 // A separate store/gateway per scenario below, same reason as db2: each test
 // needs to drive a key's failure count to an exact place, which a shared
 // queue full of unrelated activity would make fragile to assert on.
