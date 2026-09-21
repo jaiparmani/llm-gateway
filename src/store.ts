@@ -12,6 +12,7 @@ export interface ApiKeyRow {
   key: string;
   masked: string;
   label: string;
+  provider: string;
   position: number;
   uses: number;
   last_used_at: string | null;
@@ -24,6 +25,7 @@ export interface PublicKey {
   id: number;
   masked: string;
   label: string;
+  provider: string;
   uses: number;
   lastUsedAt: string | null;
   lastRateLimitedAt: string | null;
@@ -64,6 +66,7 @@ function publicKey(row: ApiKeyRow): PublicKey {
     id: row.id,
     masked: row.masked,
     label: row.label,
+    provider: row.provider,
     uses: row.uses,
     lastUsedAt: row.last_used_at,
     lastRateLimitedAt: row.last_rate_limited_at,
@@ -89,7 +92,7 @@ export class Store {
   }
 
   /** Adds a key at the back of the queue. Null if it is already there. */
-  async addKey(key: string, label = ""): Promise<PublicKey | null> {
+  async addKey(key: string, label = "", provider = "openrouter"): Promise<PublicKey | null> {
     const existing = await this.db
       .prepare("SELECT id FROM api_keys WHERE key = ?")
       .bind(key)
@@ -98,11 +101,11 @@ export class Store {
 
     const row = await this.db
       .prepare(
-        `INSERT INTO api_keys (key, masked, label, position, created_at)
-         VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM api_keys), ?)
+        `INSERT INTO api_keys (key, masked, label, provider, position, created_at)
+         VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM api_keys), ?)
          RETURNING *`,
       )
-      .bind(key, mask(key), label.slice(0, 60), now())
+      .bind(key, mask(key), label.slice(0, 60), provider, now())
       .first<ApiKeyRow>();
     return row ? publicKey(row) : null;
   }

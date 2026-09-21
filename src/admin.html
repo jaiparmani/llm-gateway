@@ -70,7 +70,7 @@
   <div class="row" style="align-items:flex-start">
     <div class="grow">
       <h1>llm-gateway</h1>
-      <p class="sub" id="note">One place for the OpenRouter keys. Everything else points here.</p>
+      <p class="sub" id="note">One place for the provider keys. Everything else points here.</p>
     </div>
     <button class="btn" id="lock" hidden>Lock</button>
   </div>
@@ -95,11 +95,14 @@
       <div class="card">
         <p class="eyebrow">Add keys</p>
         <p class="muted" style="margin:0 0 13px">
-          Paste one or more OpenRouter keys — newlines, commas or spaces between them. Each call takes the
-          key at the front of the queue and sends it to the back, so several keys multiply the free tier's
-          daily cap instead of spending one down.
+          Paste one or more keys for a single provider below — newlines, commas or spaces between them.
+          Each call takes the key at the front of the queue and sends it to the back, so several keys —
+          from one provider or several — multiply the free tier's daily cap instead of spending one down.
         </p>
-        <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="sk-or-v1-&#10;sk-or-v1-"></textarea>
+        <div class="row" style="margin-bottom:10px">
+          <select id="keyProvider" class="inp grow"></select>
+        </div>
+        <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="Paste keys here"></textarea>
         <div class="row" style="margin-top:10px">
           <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
           <button class="btn primary" id="save">Save keys</button>
@@ -191,6 +194,27 @@
   const when = (s) => String(s ?? "").slice(0, 16).replace("T", " ");
   let token = localStorage.getItem("gw.token") || "";
 
+  // ── providers ─────────────────────────────────────────────────────────────
+  // Fetched once, unauthenticated — the same list GET /v1/keys' rows reference
+  // by id, so the "add keys" picker and the queue's tags never drift apart.
+  let providers = [];
+  function providerLabel(id) {
+    return providers.find((p) => p.id === id)?.label || id;
+  }
+  async function loadProviders() {
+    try {
+      const r = await fetch("/v1/providers");
+      providers = (await r.json()).providers || [];
+    } catch { providers = []; }
+    $("#keyProvider").innerHTML = providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("");
+    updateKeyPlaceholder();
+  }
+  function updateKeyPlaceholder() {
+    const hint = providers.find((p) => p.id === $("#keyProvider").value)?.keyHint || "";
+    $("#keyInput").placeholder = hint ? `${hint}\n${hint}` : "Paste keys here";
+  }
+  loadProviders();
+
   async function api(path, options = {}) {
     const res = await fetch(path, {
       ...options,
@@ -244,7 +268,9 @@
       <div class="item">
         <span style="width:16px;text-align:center;color:${x.next ? "var(--accent)" : "var(--text-3)"}">${x.next ? "&#9654;" : "&middot;"}</span>
         <div class="grow">
-          <b>${esc(x.masked)}</b> ${x.next ? '<span class="tag" style="margin-left:7px">next</span>' : ""}
+          <b>${esc(x.masked)}</b>
+          <span class="tag" style="margin-left:7px">${esc(providerLabel(x.provider))}</span>
+          ${x.next ? '<span class="tag" style="margin-left:5px">next</span>' : ""}
           <div class="dim" style="margin-top:3px">
             ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
             ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
@@ -303,11 +329,13 @@
       : `<tr><td class="dim">Nothing yet.</td></tr>`;
   }
 
+  $("#keyProvider").onchange = updateKeyPlaceholder;
+
   $("#save").onclick = async () => {
     const keys = $("#keyInput").value.trim(); if (!keys) return;
     $("#save").disabled = true;
     try {
-      const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim() }) });
+      const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim(), provider: $("#keyProvider").value }) });
       $("#keyInput").value = ""; $("#keyLabel").value = "";
       $("#saveOut").innerHTML = `<span class="ok" style="font-size:13px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}. Test one to be sure the provider takes it.</span>`
         + (r.skipped.length ? `<div class="warn" style="font-size:12.5px;margin-top:6px">${r.skipped.map(esc).join("<br>")}</div>` : "");
@@ -380,7 +408,7 @@
       return "Every key in the rotation is out of quota" + (at ? ", until " + when(at) + " UTC." : " right now.")
         + " Add another key in the Console tab, or come back after that.";
     }
-    if (code === "no_keys_configured") return "No OpenRouter key is in the rotation, so there is nothing to call. Add one in the Console tab.";
+    if (code === "no_keys_configured") return "No provider key is in the rotation, so there is nothing to call. Add one in the Console tab.";
     if (code === "bad_model_output") return "The model returned nothing the gateway could use. Sending it again often lands on a different model in the free pool, which usually behaves.";
     if (code === "validation_failed") return message;
     if (code === "upstream_error") return message + "\nIf a key is being refused, the Console tab can test each one on its own.";

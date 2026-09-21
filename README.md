@@ -3,23 +3,25 @@
 One place for the LLM API keys, so no other repo has to hold them.
 
 Every app that wanted an LLM used to carry its own copy of the same three things:
-a set of OpenRouter keys, a rotation scheme to make the free tier last, and a pile
+a set of provider keys, a rotation scheme to make each free tier last, and a pile
 of defensive code to survive whatever the model actually returned. Three copies
 means three places to rotate a key and three chances to get the hard part wrong.
 
 ```
   brain ──────────────┐
-  (Worker)            │     ┌──────────────────────────┐
-                      ├────▶│       llm-gateway        │────▶ OpenRouter
-  ToolBox ────────────┤     │    (Cloudflare Worker)   │
-  (Django)            │     │                          │
-                      │     │  keys · rotation         │
+  (Worker)            │     ┌──────────────────────────┐     ┌─ OpenRouter
+                      ├────▶│       llm-gateway        │─────┼─ Gemini
+  ToolBox ────────────┤     │    (Cloudflare Worker)   │     ├─ Groq
+  (Django)            │     │                          │     ├─ Cerebras
+                      │     │  keys · rotation         │     └─ Mistral
   anything else ──────┘     │  JSON salvage · retry    │
                             │  per-client auth · usage │
                             └──────────────────────────┘
 ```
 
-The keys live here and nowhere else.
+The keys live here and nowhere else. One queue rotates across every provider —
+see [`src/providers.ts`](src/providers.ts) for the registry, which is also where
+a new free-tier provider gets added.
 
 Live at <https://llm-gateway.brain-store.workers.dev>. Its first caller is
 [brain](https://github.com/jaiparmani/brain-store), which holds a client token and no
@@ -46,9 +48,19 @@ worth a second implementation to keep in sync.
 
 ## What it actually does for you
 
-**Round-robin keys.** Take the key at the front of the queue, use it, push it to the
-back. N keys give N times the free tier's daily cap instead of one key being spent
-down while the others idle. A 429 pushes that key to the back and the next one serves
+**Five free providers, one queue.** [`src/providers.ts`](src/providers.ts) holds the
+registry — OpenRouter, [Google Gemini](https://ai.google.dev/), [Groq](https://groq.com/),
+[Cerebras](https://cerebras.ai/), and [Mistral](https://mistral.ai/) — each just an
+upstream URL, a default model, and what a key for it looks like. All five speak the same
+shape (Bearer auth, `{model, messages}` in, OpenAI-style `{choices, usage, model}` out),
+which is what lets one rotation loop and one `post()` serve every one of them. Adding a
+sixth is a registry entry, not a new code path.
+
+**Round-robin keys, across providers.** Take the key at the front of the queue, use it,
+push it to the back — it does not matter whose key is next, only that it is one. N keys
+give N times the free tier's daily cap instead of one key being spent down while the
+others idle, and mixing providers means a provider's own outage or tightened rate limit
+no longer stalls every call. A 429 pushes that key to the back and the next one serves
 the same request — a 429 does not consume quota, so there is nothing to bench and
 nothing to remember about which keys are "spent". The queue sorts itself out.
 
@@ -86,8 +98,9 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 |---|---|
 | `POST /v1/chat/completions` | **OpenAI-shaped.** An existing OpenRouter client moves here by changing one URL and one key. |
 | `POST /v1/json` | Salvages and validates server-side; returns a parsed object. |
-| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. Admin token. Masked values only. |
+| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Admin token. Masked values only. |
 | `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
+| `GET /v1/providers` | The provider registry — id, label, and what a key looks like. Public, no secrets in it. |
 | `GET /v1/clients` · `POST` · `DELETE /v1/clients/{name}` | Issue and revoke client tokens. Admin token. |
 | `GET /v1/usage` | Per-client and per-key accounting. Admin token. |
 | `GET /health` | Public. |
@@ -104,12 +117,28 @@ npx wrangler secret put ADMIN_TOKEN       # openssl rand -hex 32
 npm run deploy
 ```
 
-Open the Worker URL, unlock with your `ADMIN_TOKEN`, paste your keys, press Test on
-each one, and issue a token per app. `/chat` takes one of those tokens if you want to
-talk to it. `npm run dev` runs it locally against a local D1.
+Open the Worker URL, unlock with your `ADMIN_TOKEN`, pick a provider, paste your keys,
+press Test on each one, and issue a token per app. `/chat` takes one of those tokens if
+you want to talk to it. `npm run dev` runs it locally against a local D1.
 
 Without `ADMIN_TOKEN` set, the gateway still serves inference but refuses to let
 anyone add or remove a key — it disables management rather than failing open.
+
+Each provider in [`src/providers.ts`](src/providers.ts) already has a sensible free-tier
+default model; override one only if you want a different one, via `wrangler.toml`'s
+`DEFAULT_MODEL_GEMINI` / `DEFAULT_MODEL_GROQ` / `DEFAULT_MODEL_CEREBRAS` /
+`DEFAULT_MODEL_MISTRAL` (OpenRouter keeps using plain `DEFAULT_MODEL`, as before).
+
+**Upgrading an existing deployment:** the `api_keys` table gained a `provider` column.
+Run the migration once, before deploying this version:
+
+```bash
+npm run db:migrate                        # ALTER TABLE — safe to run once
+npm run deploy
+```
+
+Every key already stored was an OpenRouter key — the only provider that existed before
+this — so the migration's default backfills them correctly with nothing further to do.
 
 ## Migrating keys in
 
@@ -145,8 +174,9 @@ the Django side, unapplied.
 ## Security
 
 The one rule: **a key goes in and never comes back out.** Every API response and every
-pixel of the UI shows `sk-or-v1-abc...wxyz`, never a value — there is a test for it on
-each surface that returns anything. That includes the surfaces that quote the provider:
+pixel of the UI shows a masked form like `sk-or-v1-abc...wxyz`, never a value — there is
+a test for it on each surface that returns anything. That includes the surfaces that
+quote the provider:
 a provider is free to echo back the credential it just refused, so anything passing an
 upstream message through masks the key inside it first.
 
@@ -162,7 +192,7 @@ account, and nothing in this repo ever holds one.
 npm test
 ```
 
-60 checks: the salvaging, the rotation, the retry, the auth, the accounting, and on
-every surface that returns anything, an assertion that a key is not in it. They run
-against real SQL — a `node:sqlite` stand-in for D1 — rather than a fake that agrees
-with whatever the code happens to do.
+74 checks: the salvaging, the rotation across one provider and across several, the
+retry, the auth, the accounting, and on every surface that returns anything, an
+assertion that a key is not in it. They run against real SQL — a `node:sqlite`
+stand-in for D1 — rather than a fake that agrees with whatever the code happens to do.

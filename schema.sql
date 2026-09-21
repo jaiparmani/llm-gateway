@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key                  TEXT    NOT NULL UNIQUE,
     masked               TEXT    NOT NULL,
     label                TEXT    NOT NULL DEFAULT '',
+    -- Which provider this key belongs to — see src/providers.ts for the
+    -- registry. Defaulted rather than required so a row from before this
+    -- column existed still reads as the one provider the gateway used to
+    -- support.
+    provider             TEXT    NOT NULL DEFAULT 'openrouter',
     position             INTEGER NOT NULL DEFAULT 0,
     uses                 INTEGER NOT NULL DEFAULT 0,
     last_used_at         TEXT,
@@ -17,6 +22,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at           TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS api_keys_position ON api_keys (position, id);
+CREATE INDEX IF NOT EXISTS api_keys_provider ON api_keys (provider);
 
 CREATE TABLE IF NOT EXISTS clients (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,12 +1,16 @@
 import { extractJson, SalvageError } from "./salvage.ts";
+import { providerOf } from "./providers.ts";
 import { Store, type ApiKeyRow } from "./store.ts";
 
 /**
  * The gateway itself: rotation, retry, salvaging. The router is a thin adapter
  * over this, so every rule is written once and is testable without HTTP.
+ *
+ * Keys queue together across providers — the queue does not care whose key is
+ * next, only that it is a key. What varies per provider is just the upstream
+ * URL and the model asked for when nothing more specific was given; both come
+ * from `src/providers.ts`, keyed off `key.provider`.
  */
-
-const UPSTREAM = "https://openrouter.ai/api/v1/chat/completions";
 
 export const RETRY_INSTRUCTION =
   "That was not usable. Reply with ONLY a JSON object — no prose, no code fences.";
@@ -63,7 +67,11 @@ export interface Completion {
 }
 
 export interface GatewayConfig {
+  /** The OpenRouter default — kept under its old name for compatibility. */
   defaultModel: string;
+  /** Per-provider default-model overrides, keyed by provider id. */
+  providerDefaultModels?: Partial<Record<string, string>>;
+  /** Overrides every provider's upstream URL. Exists so tests can point at a stub. */
   upstreamUrl?: string;
   referer?: string;
   title?: string;
@@ -83,6 +91,24 @@ export class Gateway {
     };
   }
 
+  private urlFor(providerId: string): string {
+    return this.config.upstreamUrl ?? providerOf(providerId).upstreamUrl;
+  }
+
+  /**
+   * The model to ask for on a key with this provider, when nothing more
+   * specific applies: a configured override, else the registry's default.
+   * `defaultModel` keeps its old meaning — the OpenRouter override — rather
+   * than silently becoming every provider's fallback.
+   */
+  private modelFor(providerId: string): string {
+    return (
+      this.config.providerDefaultModels?.[providerId] ??
+      (providerId === "openrouter" ? this.config.defaultModel : undefined) ??
+      providerOf(providerId).defaultModel
+    );
+  }
+
   private async post(
     messages: Message[],
     key: ApiKeyRow,
@@ -100,7 +126,7 @@ export class Gateway {
 
     let response: Response;
     try {
-      response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
+      response = await fetch(this.urlFor(key.provider), {
         method: "POST",
         headers: this.headers(key),
         body: JSON.stringify(body),
@@ -175,11 +201,10 @@ export class Gateway {
     const keys = await this.store.keys();
     if (keys.length === 0) {
       throw new NoKeysConfigured(
-          "No OpenRouter key is configured on the gateway. Add one at the admin page.",
+          "No provider key is configured on the gateway. Add one at the admin page.",
         );
     }
 
-    const model = opts.model || this.config.defaultModel;
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
     let lastUnusable: BadModelOutput | null = null;
@@ -187,6 +212,11 @@ export class Gateway {
     for (const key of keys) {
       tried.push(key.masked);
       try {
+        // A caller-supplied model is only meaningful for the provider whose
+        // namespace it names. Only OpenRouter's `model` has ever been safe to
+        // pass through generically — everyone else's model ids are provider-
+        // specific, so those keys stick to their own configured default.
+        const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider);
         const completion = await this.post(messages, key, model, opts.maxTokens, !!opts.jsonObject);
         await this.store.pushToBack(key.id, false);
         completion.keysTried = tried;
@@ -270,11 +300,11 @@ export class Gateway {
 
     let response: Response;
     try {
-      response = await fetch(this.config.upstreamUrl ?? UPSTREAM, {
+      response = await fetch(this.urlFor(key.provider), {
         method: "POST",
         headers: this.headers(key),
         body: JSON.stringify({
-          model: this.config.defaultModel,
+          model: this.modelFor(key.provider),
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
         }),

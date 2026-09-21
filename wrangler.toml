@@ -4,13 +4,22 @@ compatibility_date = "2026-09-01"
 
 # Secrets are set with:
 #   wrangler secret put ADMIN_TOKEN
-# The OpenRouter keys are NOT secrets here — they live in D1, added through the
-# admin page, so they can be rotated without a deploy.
+# Provider keys (OpenRouter, Gemini, Groq, ...) are NOT secrets here — they
+# live in D1, added through the admin page, so they can be rotated without a
+# deploy. See src/providers.ts for the full registry.
 
 [vars]
-# Which model to ask for when a caller does not name one. The free pool routes
-# each call to a different model, which is why the salvaging exists.
+# Which model to ask for on an OpenRouter key when a caller does not name one.
+# The free pool routes each call to a different model, which is why the
+# salvaging exists.
 DEFAULT_MODEL = "openrouter/free"
+
+# Every other provider already has a sane free-tier default in
+# src/providers.ts. Uncomment and set only to override one:
+# DEFAULT_MODEL_GEMINI = "gemini-2.0-flash"
+# DEFAULT_MODEL_GROQ = "llama-3.3-70b-versatile"
+# DEFAULT_MODEL_CEREBRAS = "llama-3.3-70b"
+# DEFAULT_MODEL_MISTRAL = "mistral-small-latest"
 
 # Holds the key queue, the client tokens and the usage ledger. D1 rather than KV
 # because this writes on every call: D1's free plan allows 100k writes a day

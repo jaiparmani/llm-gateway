@@ -288,6 +288,87 @@ check("testing a key that is not there is a clean 404",
 check("testing a key needs the admin token, not a client token",
   (await req("POST", `/v1/keys/${idB}/test`, undefined, brainToken)).status === 401);
 
+console.log("\n── multiple providers ──");
+
+// A separate store/gateway so this doesn't disturb the exact key counts the
+// rotation checks above depend on.
+const db2 = makeD1(schema);
+const store2 = new Store(db2);
+const gateway2 = new Gateway(store2, {
+  defaultModel: "stub/default",
+  upstreamUrl,
+  timeoutMs: 5000,
+  providerDefaultModels: { gemini: "stub/gemini-model" },
+});
+const deps2 = { store: store2, gateway: gateway2, adminToken: "admin-t0ken" };
+async function req2(method: string, path: string, body?: unknown, token = "admin-t0ken") {
+  const res = await handle(
+    new Request(`http://x${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    }),
+    deps2,
+  );
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : null, raw: text };
+}
+
+const list = await req2("GET", "/v1/providers", undefined, "");
+check("the provider list is public and includes the new ones",
+  list.status === 200 && ["openrouter", "gemini", "groq", "cerebras", "mistral"].every(
+    (id) => list.body.providers.some((p: any) => p.id === id)),
+  list.body);
+
+const geminiKey = "AIza" + "g".repeat(35);
+
+const unknownProvider = await req2("POST", "/v1/keys", { keys: geminiKey, provider: "nope" });
+check("an unknown provider is refused",
+  unknownProvider.status === 400 && unknownProvider.body.error.code === "validation_failed", unknownProvider.raw);
+
+const wrongShape = await req2("POST", "/v1/keys", { keys: keyOf("a"), provider: "gemini" });
+check("a key shaped for one provider is refused for another",
+  wrongShape.status === 400 && wrongShape.body.skipped[0].includes("Google Gemini"), wrongShape.body);
+
+const addedGemini = await req2("POST", "/v1/keys", { keys: geminiKey, provider: "gemini" });
+check("a Gemini key is stored under its own provider",
+  addedGemini.status === 201 && addedGemini.body.added[0].provider === "gemini", addedGemini.raw);
+
+const orKeyForTest = keyOf("z");
+await req2("POST", "/v1/keys", { keys: orKeyForTest }); // no provider given — still defaults to openrouter
+
+const issued2 = await req2("POST", "/v1/clients", { name: "multi" });
+const multiToken = issued2.body.token as string;
+
+seen.length = 0;
+script = [say("hi from gemini", "stub/gemini-actual")];
+await req2("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, multiToken);
+check("the gemini key (first in, first served) gets gemini's own default model",
+  seen[0]!.body.model === "stub/gemini-model", seen[0]?.body);
+
+seen.length = 0;
+script = [say("hi from openrouter")];
+await req2("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, multiToken);
+check("rotation moves on to the openrouter key with its own default model",
+  seen[0]!.body.model === "stub/default", seen[0]?.body);
+
+// Queue is back at the gemini key now.
+seen.length = 0;
+script = [say("ignored override")];
+await req2("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }], model: "custom-or-model" }, multiToken);
+check("a caller-supplied model does not leak onto a non-OpenRouter key",
+  seen[0]!.body.model === "stub/gemini-model", seen[0]?.body);
+
+seen.length = 0;
+script = [say("used override")];
+await req2("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }], model: "custom-or-model" }, multiToken);
+check("a caller-supplied model is honored on an OpenRouter key",
+  seen[0]!.body.model === "custom-or-model", seen[0]?.body);
+
+const queue2 = await req2("GET", "/v1/keys");
+check("the queue reports which provider each key belongs to",
+  new Set(queue2.body.queue.map((k: any) => k.provider)).size === 2, queue2.body.queue.map((k: any) => k.provider));
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

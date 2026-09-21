@@ -1,4 +1,5 @@
 import { Gateway, GatewayError, type Message } from "./gateway.ts";
+import { isKnownProvider, PROVIDERS, providerOf } from "./providers.ts";
 import { mask, Store } from "./store.ts";
 import { ADMIN_HTML } from "./ui.generated.ts";
 
@@ -21,9 +22,6 @@ export interface RouterDeps {
   adminToken: string;
 }
 
-/** Anything else is a typo, and a typo stored 401s every call for a week. */
-const KEY_SHAPE = /^sk-or-v1-[A-Za-z0-9]{32,}$/;
-
 export async function handle(request: Request, deps: RouterDeps): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -33,6 +31,15 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
 
   if (path === "/health") {
     return json({ ok: true, keys: (await deps.store.keys()).length, version: "0.1.0" });
+  }
+
+  // Which providers a key can be added for. No secrets in it, so it is public
+  // the same way /health is — the admin console uses it to build the "add
+  // keys" provider picker without hard-coding the list twice.
+  if (path === "/v1/providers" && method === "GET") {
+    return json({
+      providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label, keyHint: p.keyHint })),
+    });
   }
 
   // One file, two pages: the console and the chat. Both are the same document,
@@ -127,19 +134,28 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     }
 
     if (path === "/v1/keys" && method === "POST") {
-      const body = (await request.json()) as { keys?: unknown; label?: unknown };
+      const body = (await request.json()) as { keys?: unknown; label?: unknown; provider?: unknown };
       const raw = typeof body.keys === "string" ? body.keys : "";
       const label = typeof body.label === "string" ? body.label : "";
+      const providerId = typeof body.provider === "string" && body.provider ? body.provider : "openrouter";
       const candidates = [...new Set(raw.split(/[\s,;]+/).map((k) => k.trim()).filter(Boolean))];
+
+      if (!isKnownProvider(providerId)) {
+        return json(
+          { error: { code: "validation_failed", message: `Unknown provider "${providerId}". See GET /v1/providers.` } },
+          400,
+        );
+      }
+      const provider = providerOf(providerId);
 
       const added = [];
       const skipped: string[] = [];
       for (const key of candidates) {
-        if (!KEY_SHAPE.test(key)) {
-          skipped.push(`${mask(key)} — does not look like an OpenRouter key (expected sk-or-v1-…)`);
+        if (!provider.keyShape.test(key)) {
+          skipped.push(`${mask(key)} — does not look like a ${provider.label} key (expected ${provider.keyHint})`);
           continue;
         }
-        const stored = await deps.store.addKey(key, label);
+        const stored = await deps.store.addKey(key, label, providerId);
         if (stored) added.push(stored);
         else skipped.push(`${mask(key)} — already stored`);
       }
