@@ -101,6 +101,7 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 | `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Admin token. Masked values only. |
 | `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
 | `GET /v1/providers` | The provider registry — id, label, and what a key looks like. Public, no secrets in it. |
+| `GET /v1/models` · `POST` | Each provider's effective model and any override. `POST {provider, model}` sets one; an empty `model` clears it. Admin token. |
 | `GET /v1/clients` · `POST` · `DELETE /v1/clients/{name}` | Issue and revoke client tokens. Admin token. |
 | `GET /v1/usage` | Per-client and per-key accounting. Admin token. |
 | `GET /health` | Public. |
@@ -125,9 +126,13 @@ Without `ADMIN_TOKEN` set, the gateway still serves inference but refuses to let
 anyone add or remove a key — it disables management rather than failing open.
 
 Each provider in [`src/providers.ts`](src/providers.ts) already has a sensible free-tier
-default model; override one only if you want a different one, via `wrangler.toml`'s
+default model. Providers rename and retire models often enough that this needed to be
+fixable without a deploy — the console's "Default models" card sets a per-provider
+override straight in D1 (`GET`/`POST /v1/models`). `wrangler.toml`'s
 `DEFAULT_MODEL_GEMINI` / `DEFAULT_MODEL_GROQ` / `DEFAULT_MODEL_CEREBRAS` /
-`DEFAULT_MODEL_MISTRAL` (OpenRouter keeps using plain `DEFAULT_MODEL`, as before).
+`DEFAULT_MODEL_MISTRAL` (OpenRouter keeps plain `DEFAULT_MODEL`, as before) still work as
+a lower-priority fallback, mainly for a fresh deployment before anyone has opened the
+console.
 
 **Upgrading an existing deployment:** the `api_keys` table gained a `provider` column.
 Run the migration once, before deploying this version:
@@ -192,7 +197,8 @@ account, and nothing in this repo ever holds one.
 npm test
 ```
 
-74 checks: the salvaging, the rotation across one provider and across several, the
-retry, the auth, the accounting, and on every surface that returns anything, an
-assertion that a key is not in it. They run against real SQL — a `node:sqlite`
-stand-in for D1 — rather than a fake that agrees with whatever the code happens to do.
+80 checks: the salvaging, the rotation across one provider and across several, model
+overrides taking effect on the very next call, the retry, the auth, the accounting, and
+on every surface that returns anything, an assertion that a key is not in it. They run
+against real SQL — a `node:sqlite` stand-in for D1 — rather than a fake that agrees with
+whatever the code happens to do.

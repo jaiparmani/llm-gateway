@@ -136,6 +136,33 @@ export class Store {
       .run();
   }
 
+  // ── model overrides ──────────────────────────────────────────────────────
+
+  /** Provider id → overridden model, for every provider an admin has set one on. */
+  async modelOverrides(): Promise<Record<string, string>> {
+    const { results } = await this.db
+      .prepare("SELECT provider, model FROM provider_models")
+      .all<{ provider: string; model: string }>();
+    const out: Record<string, string> = {};
+    for (const row of results ?? []) out[row.provider] = row.model;
+    return out;
+  }
+
+  /** Empty `model` clears the override, reverting that provider to its registry default. */
+  async setModelOverride(provider: string, model: string): Promise<void> {
+    if (!model) {
+      await this.db.prepare("DELETE FROM provider_models WHERE provider = ?").bind(provider).run();
+      return;
+    }
+    await this.db
+      .prepare(
+        `INSERT INTO provider_models (provider, model, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(provider) DO UPDATE SET model = excluded.model, updated_at = excluded.updated_at`,
+      )
+      .bind(provider, model, now())
+      .run();
+  }
+
   // ── clients ───────────────────────────────────────────────────────────────
 
   /** Creates or re-keys a client and returns its token. Shown once. */

@@ -1,5 +1,5 @@
 import { extractJson, SalvageError } from "./salvage.ts";
-import { providerOf } from "./providers.ts";
+import { isKnownProvider, providerIds, providerOf } from "./providers.ts";
 import { Store, type ApiKeyRow } from "./store.ts";
 
 /**
@@ -97,12 +97,15 @@ export class Gateway {
 
   /**
    * The model to ask for on a key with this provider, when nothing more
-   * specific applies: a configured override, else the registry's default.
-   * `defaultModel` keeps its old meaning — the OpenRouter override — rather
-   * than silently becoming every provider's fallback.
+   * specific applies, in order: an override set from the admin console (a
+   * provider renaming or retiring a model is then a text field, not a
+   * deploy), a `wrangler.toml` env override, else the registry's default.
+   * `defaultModel` keeps its old meaning — the OpenRouter env override —
+   * rather than silently becoming every provider's fallback.
    */
-  private modelFor(providerId: string): string {
+  private modelFor(providerId: string, overrides: Record<string, string>): string {
     return (
+      overrides[providerId] ??
       this.config.providerDefaultModels?.[providerId] ??
       (providerId === "openrouter" ? this.config.defaultModel : undefined) ??
       providerOf(providerId).defaultModel
@@ -205,6 +208,7 @@ export class Gateway {
         );
     }
 
+    const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
     let lastUnusable: BadModelOutput | null = null;
@@ -216,7 +220,7 @@ export class Gateway {
         // namespace it names. Only OpenRouter's `model` has ever been safe to
         // pass through generically — everyone else's model ids are provider-
         // specific, so those keys stick to their own configured default.
-        const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider);
+        const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider, overrides);
         const completion = await this.post(messages, key, model, opts.maxTokens, !!opts.jsonObject);
         await this.store.pushToBack(key.id, false);
         completion.keysTried = tried;
@@ -304,7 +308,7 @@ export class Gateway {
         method: "POST",
         headers: this.headers(key),
         body: JSON.stringify({
-          model: this.modelFor(key.provider),
+          model: this.modelFor(key.provider, await this.store.modelOverrides()),
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
         }),
@@ -356,6 +360,33 @@ export class Gateway {
           "being spent down on one key."
         : "No keys configured — every call will fail with 503 until one is added.",
     };
+  }
+
+  /**
+   * Every provider's model, and where it comes from — for the admin console's
+   * "default models" card. `effective` is exactly what `modelFor` would pick.
+   */
+  async modelSettings(): Promise<
+    { provider: string; label: string; registryDefault: string; override: string | null; effective: string }[]
+  > {
+    const overrides = await this.store.modelOverrides();
+    return providerIds().map((id) => {
+      const def = providerOf(id);
+      return {
+        provider: id,
+        label: def.label,
+        registryDefault: def.defaultModel,
+        override: overrides[id] ?? null,
+        effective: this.modelFor(id, overrides),
+      };
+    });
+  }
+
+  /** Empty `model` clears the override, reverting to the registry (or env) default. False for an unknown provider. */
+  async setModel(provider: string, model: string): Promise<boolean> {
+    if (!isKnownProvider(provider)) return false;
+    await this.store.setModelOverride(provider, model.trim());
+    return true;
   }
 }
 

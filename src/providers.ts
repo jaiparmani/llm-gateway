@@ -44,7 +44,9 @@ export const PROVIDERS: Record<string, ProviderDef> = {
     id: "groq",
     label: "Groq",
     upstreamUrl: "https://api.groq.com/openai/v1/chat/completions",
-    defaultModel: "llama-3.3-70b-versatile",
+    // llama-3.3-70b-versatile moved behind Enterprise pricing; Groq's own docs
+    // point free/dev-tier callers at gpt-oss-120b instead.
+    defaultModel: "openai/gpt-oss-120b",
     keyShape: /^gsk_[A-Za-z0-9]{32,}$/,
     keyHint: "gsk_…",
   },
@@ -52,7 +54,8 @@ export const PROVIDERS: Record<string, ProviderDef> = {
     id: "cerebras",
     label: "Cerebras",
     upstreamUrl: "https://api.cerebras.ai/v1/chat/completions",
-    defaultModel: "llama-3.3-70b",
+    // No hyphen after "llama" — that is Cerebras's actual model id, not a typo.
+    defaultModel: "llama3.3-70b",
     keyShape: /^csk-[A-Za-z0-9]{32,}$/,
     keyHint: "csk-…",
   },

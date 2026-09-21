@@ -288,6 +288,41 @@ check("testing a key that is not there is a clean 404",
 check("testing a key needs the admin token, not a client token",
   (await req("POST", `/v1/keys/${idB}/test`, undefined, brainToken)).status === 401);
 
+console.log("\n── fixing a default model from the console, without a deploy ──");
+
+const modelsBefore = await req("GET", "/v1/models");
+check("every provider starts with no override, using its configured default",
+  modelsBefore.status === 200
+  && modelsBefore.body.models.find((m: any) => m.provider === "openrouter").override === null
+  && modelsBefore.body.models.find((m: any) => m.provider === "openrouter").effective === "stub/default",
+  modelsBefore.body.models);
+check("reading the model settings needs the admin token, not a client token",
+  (await req("GET", "/v1/models", undefined, brainToken)).status === 401);
+
+const badProviderModel = await req("POST", "/v1/models", { provider: "not-a-provider", model: "x" });
+check("setting a model on an unknown provider is refused",
+  badProviderModel.status === 400 && badProviderModel.body.error.code === "validation_failed", badProviderModel.raw);
+
+const setModel = await req("POST", "/v1/models", { provider: "openrouter", model: "corrected/model-id" });
+check("a corrected model id is stored as that provider's override",
+  setModel.status === 200
+  && setModel.body.models.find((m: any) => m.provider === "openrouter").override === "corrected/model-id"
+  && setModel.body.models.find((m: any) => m.provider === "openrouter").effective === "corrected/model-id",
+  setModel.body.models);
+
+seen.length = 0;
+script = [say("hi")];
+await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
+check("the very next call actually asks the provider for the corrected model — no deploy needed",
+  seen[0]!.body.model === "corrected/model-id", seen[0]?.body);
+
+const clearedModel = await req("POST", "/v1/models", { provider: "openrouter", model: "" });
+check("an empty model clears the override, reverting to the configured default",
+  clearedModel.status === 200
+  && clearedModel.body.models.find((m: any) => m.provider === "openrouter").override === null
+  && clearedModel.body.models.find((m: any) => m.provider === "openrouter").effective === "stub/default",
+  clearedModel.body.models);
+
 console.log("\n── multiple providers ──");
 
 // A separate store/gateway so this doesn't disturb the exact key counts the

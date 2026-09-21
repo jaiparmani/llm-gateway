@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS clients (
     created_at TEXT    NOT NULL
 );
 
+-- One row per provider with a model set from the admin console, overriding
+-- its registry default in src/providers.ts. Providers rename and retire
+-- models often enough (see migrations/0002) that this needed to be a value an
+-- admin can fix from the UI, not a constant that needs a deploy.
+CREATE TABLE IF NOT EXISTS provider_models (
+    provider   TEXT PRIMARY KEY,
+    model      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS usage (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     at            TEXT    NOT NULL,

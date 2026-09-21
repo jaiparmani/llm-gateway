@@ -17,8 +17,8 @@ DEFAULT_MODEL = "openrouter/free"
 # Every other provider already has a sane free-tier default in
 # src/providers.ts. Uncomment and set only to override one:
 # DEFAULT_MODEL_GEMINI = "gemini-2.0-flash"
-# DEFAULT_MODEL_GROQ = "llama-3.3-70b-versatile"
-# DEFAULT_MODEL_CEREBRAS = "llama-3.3-70b"
+# DEFAULT_MODEL_GROQ = "openai/gpt-oss-120b"
+# DEFAULT_MODEL_CEREBRAS = "llama3.3-70b"
 # DEFAULT_MODEL_MISTRAL = "mistral-small-latest"
 
 # Holds the key queue, the client tokens and the usage ledger. D1 rather than KV

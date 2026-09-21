@@ -111,6 +111,16 @@
       </div>
 
       <div class="card">
+        <p class="eyebrow">Default models</p>
+        <p class="muted" style="margin:0 0 13px">
+          What each provider is asked for when nothing more specific applies. Providers rename and
+          retire models — set one here to fix it immediately, no deploy. Leave blank to fall back to
+          the built-in default shown as the field's placeholder.
+        </p>
+        <div id="models"></div>
+      </div>
+
+      <div class="card">
         <p class="eyebrow">Rotation queue</p>
         <p class="muted" style="margin:0 0 13px">
           Test asks the provider about that one key alone, outside the rotation — a typo is worth finding
@@ -261,6 +271,36 @@
   $("#tok").onkeydown = (e) => { if (e.key === "Enter") unlock($("#tok").value); };
   $("#lock").onclick = lock;
 
+  async function drawModels() {
+    const m = await api("/v1/models");
+    $("#models").innerHTML = m.models.map((x) => `
+      <div class="item">
+        <div class="grow">
+          <b>${esc(x.label)}</b>
+          <div class="row" style="margin-top:7px">
+            <input class="inp grow" data-model="${esc(x.provider)}" placeholder="${esc(x.registryDefault)}" value="${esc(x.override || "")}">
+            <button class="btn small" data-model-save="${esc(x.provider)}">Save</button>
+          </div>
+          <div class="dim" style="margin-top:5px">using <code>${esc(x.effective)}</code>${x.override ? "" : " &middot; built-in default"}</div>
+          <div class="probe" data-model-out="${esc(x.provider)}" hidden></div>
+        </div>
+      </div>`).join("");
+
+    document.querySelectorAll("[data-model-save]").forEach((b) => (b.onclick = async () => {
+      const id = b.dataset.modelSave;
+      const input = document.querySelector('[data-model="' + id + '"]');
+      const out = document.querySelector('[data-model-out="' + id + '"]');
+      b.disabled = true;
+      try {
+        await api("/v1/models", { method: "POST", body: JSON.stringify({ provider: id, model: input.value.trim() }) });
+        await drawModels();
+      } catch (e) {
+        out.hidden = false; out.className = "probe bad"; out.textContent = e.message;
+        b.disabled = false;
+      }
+    }));
+  }
+
   async function load() {
     const k = await api("/v1/keys");
     $("#note").textContent = k.note;
@@ -298,6 +338,8 @@
       if (!confirm("Remove this key from the rotation?")) return;
       try { await api("/v1/keys/" + b.dataset.del, { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
     }));
+
+    await drawModels();
 
     const c = await api("/v1/clients");
     $("#clients").innerHTML = c.clients.length ? c.clients.map((x) => `

@@ -120,13 +120,34 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     }
 
     // ── management: admin token only ────────────────────────────────────────
-    if (path.startsWith("/v1/keys") || path.startsWith("/v1/clients") || path === "/v1/usage") {
+    if (
+      path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
+      path === "/v1/usage" || path === "/v1/models"
+    ) {
       if (!deps.adminToken) {
         return json({ error: { code: "no_admin_token", message: "ADMIN_TOKEN is not set, so management is disabled." } }, 503);
       }
       if (!isAdmin) {
         return json({ error: { code: "unauthorized", message: "Admin token required." } }, 401);
       }
+    }
+
+    if (path === "/v1/models" && method === "GET") {
+      return json({ models: await deps.gateway.modelSettings() });
+    }
+
+    if (path === "/v1/models" && method === "POST") {
+      const body = (await request.json()) as { provider?: unknown; model?: unknown };
+      const providerId = typeof body.provider === "string" ? body.provider : "";
+      const model = typeof body.model === "string" ? body.model : "";
+      const ok = await deps.gateway.setModel(providerId, model);
+      if (!ok) {
+        return json(
+          { error: { code: "validation_failed", message: `Unknown provider "${providerId}". See GET /v1/providers.` } },
+          400,
+        );
+      }
+      return json({ models: await deps.gateway.modelSettings() });
     }
 
     if (path === "/v1/keys" && method === "GET") {
