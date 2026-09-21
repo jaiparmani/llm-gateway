@@ -64,6 +64,23 @@ no longer stalls every call. A 429 pushes that key to the back and the next one 
 the same request — a 429 does not consume quota, so there is nothing to bench and
 nothing to remember about which keys are "spent". The queue sorts itself out.
 
+**Rotating past a real failure, and benching what stays broken.** A 429 or an empty
+completion were never the whole story — a revoked key (401), a model id a provider
+retired (404), an outage (5xx or a network failure) used to abort the entire request,
+even with healthy keys sitting right behind it in the queue. Now those rotate to the
+next key too. Unlike a 429 (merely spent) or an empty completion (the model's fault, not
+the key's), this kind of failure *is* evidence the key or its provider is actually
+broken, so it also counts: five in a row and the key is benched, skipped by normal
+rotation until a call succeeds or an admin clears it from the console. A provider-wide
+problem — a retired model id 404ing identically for every key on that provider — needs
+no separate detection, since it benches every one of that provider's keys the same way.
+The one upstream failure that does *not* rotate is a 400: that means this gateway's own
+request was unacceptable, every key would get the identical rejection, and rotating
+would just spend healthy keys relearning what one attempt already showed. Benching can
+never wedge the queue shut, either — if every key ends up benched at once, the gateway
+still tries all of them rather than answering as if none were configured; a success
+clears the bench the same way the console's manual "un-bench" does.
+
 **Surviving the free pool.** The default `openrouter/free` model routes every call to
 a different model. Some wrap the object in prose, some emit a `<think>` block
 containing its own braces, some ignore JSON mode entirely and fence the whole reply.
@@ -98,8 +115,9 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 |---|---|
 | `POST /v1/chat/completions` | **OpenAI-shaped.** An existing OpenRouter client moves here by changing one URL and one key. |
 | `POST /v1/json` | Salvages and validates server-side; returns a parsed object. |
-| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Admin token. Masked values only. |
+| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Each key reports whether it is currently benched and why. Admin token. Masked values only. |
 | `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
+| `POST /v1/keys/{id}/unbench` | Manually clears a key's benched state — the same effect a successful call has, for after you've fixed whatever was wrong upstream. Admin token. |
 | `GET /v1/providers` | The provider registry — id, label, and what a key looks like. Public, no secrets in it. |
 | `GET /v1/models` · `POST` | Each provider's effective model and any override. `POST {provider, model}` sets one; an empty `model` clears it. Admin token. |
 | `GET /v1/clients` · `POST` · `DELETE /v1/clients/{name}` | Issue and revoke client tokens. Admin token. |
@@ -140,13 +158,17 @@ releases at once, run the older ones by hand first (each file's header has the e
 `wrangler d1 execute` command):
 
 ```bash
-wrangler d1 execute llm-gateway --remote --file=migrations/0001_add_provider.sql  # if not already applied
-npm run db:migrate                        # applies migrations/0002_add_provider_models.sql
+wrangler d1 execute llm-gateway --remote --file=migrations/0001_add_provider.sql          # if not already applied
+wrangler d1 execute llm-gateway --remote --file=migrations/0002_add_provider_models.sql   # if not already applied
+npm run db:migrate                        # applies migrations/0003_add_key_health.sql
 npm run deploy
 ```
 
 Every key already stored was an OpenRouter key — the only provider that existed before
-this — so the migration's default backfills them correctly with nothing further to do.
+this — so migration 0001's default backfills them correctly with nothing further to do.
+Migration 0003 backfills every existing key as unbenched with zero failures, which is
+correct for the same reason: nothing about a key's history before the upgrade should
+count toward benching it now.
 
 ## Migrating keys in
 
@@ -200,8 +222,10 @@ account, and nothing in this repo ever holds one.
 npm test
 ```
 
-80 checks: the salvaging, the rotation across one provider and across several, model
-overrides taking effect on the very next call, the retry, the auth, the accounting, and
-on every surface that returns anything, an assertion that a key is not in it. They run
-against real SQL — a `node:sqlite` stand-in for D1 — rather than a fake that agrees with
-whatever the code happens to do.
+97 checks: the salvaging, the rotation across one provider and across several, key
+health — rotating past a hard failure, benching one that keeps failing, a success
+resetting the count, a 429 never counting toward it, and the queue never wedging shut
+even with every key benched — model overrides taking effect on the very next call, the
+retry, the auth, the accounting, and on every surface that returns anything, an
+assertion that a key is not in it. They run against real SQL — a `node:sqlite` stand-in
+for D1 — rather than a fake that agrees with whatever the code happens to do.

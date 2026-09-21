@@ -315,8 +315,10 @@
             ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
             ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
           </div>
+          ${x.benched ? '<div class="bad" style="margin-top:3px;font-size:11.5px">benched — skipped by rotation' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 140)) : "") + "</div>" : ""}
           <div class="probe" data-probe="${x.id}" hidden></div>
         </div>
+        ${x.benched ? `<button class="btn small" data-unbench="${x.id}">Un-bench</button>` : ""}
         <button class="btn small" data-test="${x.id}">Test</button>
         <button class="btn danger small" data-del="${x.id}">Remove</button>
       </div>`).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
@@ -332,6 +334,12 @@
         out.textContent = word + " — " + r.message;
       } catch (e) { out.className = "probe bad"; out.textContent = "Could not run the test: " + e.message; }
       b.disabled = false;
+    }));
+
+    document.querySelectorAll("[data-unbench]").forEach((b) => (b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/v1/keys/" + b.dataset.unbench + "/unbench", { method: "POST" }); await load(); }
+      catch (e) { alert(e.message); b.disabled = false; }
     }));
 
     document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {

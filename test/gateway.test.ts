@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { Gateway } from "../src/gateway.ts";
 import { handle } from "../src/router.ts";
 import { extractJson } from "../src/salvage.ts";
-import { mask, Store } from "../src/store.ts";
+import { BENCH_THRESHOLD, mask, Store } from "../src/store.ts";
 import { makeD1 } from "./d1.ts";
 
 let failures = 0;
@@ -36,6 +36,12 @@ const say = (content: string, model = "stub/model-a") => ({
 const rateLimited = (reset = "1789000000000") => ({
   status: 429,
   body: { error: { metadata: { headers: { "X-RateLimit-Reset": reset } } } },
+});
+// A hard failure — not a 429, not an empty completion — the kind that now
+// rotates to the next key and counts toward benching one.
+const serverError = () => ({
+  status: 500,
+  body: { error: { message: "internal error at __KEY__" } },
 });
 const keyOf = (n: string) => "sk-or-v1-" + (n.repeat(64)).slice(0, 64);
 const keysUsed = () => seen.map((s) => s.auth.replace("Bearer ", ""));
@@ -181,7 +187,12 @@ script = [say('{"a":1}')];
 await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }], response_format: { type: "json_object" } }, brainToken);
 check("response_format is passed upstream", seen[0]!.body.response_format?.type === "json_object", seen[0]?.body);
 
-script = [{ status: 401, body: { error: { message: "No auth credentials found for __KEY__" } } }];
+// A hard failure now rotates through every key instead of aborting on the
+// first one (see Gateway.chat), so all three keys need a scripted 401 here —
+// with fewer, a later key would fall through to the stub's default 200 reply
+// and this would stop testing what it says it tests.
+const unauthorized = { status: 401, body: { error: { message: "No auth credentials found for __KEY__" } } };
+script = [unauthorized, unauthorized, unauthorized];
 const refused = await req("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, brainToken);
 check("a refusal carries the provider's sentence, not its JSON envelope",
   refused.status === 502 && refused.body.error.message.includes("No auth credentials")
@@ -403,6 +414,161 @@ check("a caller-supplied model is honored on an OpenRouter key",
 const queue2 = await req2("GET", "/v1/keys");
 check("the queue reports which provider each key belongs to",
   new Set(queue2.body.queue.map((k: any) => k.provider)).size === 2, queue2.body.queue.map((k: any) => k.provider));
+
+// A separate store/gateway per scenario below, same reason as db2: each test
+// needs to drive a key's failure count to an exact place, which a shared
+// queue full of unrelated activity would make fragile to assert on.
+function reqFor(deps: { store: Store; gateway: Gateway; adminToken: string }) {
+  return async (method: string, path: string, body?: unknown, token = "admin-t0ken") => {
+    const res = await handle(
+      new Request(`http://x${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+      deps,
+    );
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null, raw: text };
+  };
+}
+
+console.log("\n── key health: rotating past a hard failure, and benching one ──");
+
+const db3 = makeD1(schema);
+const store3 = new Store(db3);
+const gateway3 = new Gateway(store3, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps3 = { store: store3, gateway: gateway3, adminToken: "admin-t0ken" };
+const req3 = reqFor(deps3);
+
+await req3("POST", "/v1/keys", { keys: `${keyOf("m")}\n${keyOf("n")}` });
+const issued3 = await req3("POST", "/v1/clients", { name: "health" });
+const healthToken = issued3.body.token as string;
+
+seen.length = 0;
+script = [serverError(), say("second key saved it")];
+const rotated = await req3("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, healthToken);
+check("a hard failure (not a 429, not an empty reply) rotates to the next key instead of aborting the request",
+  rotated.status === 200 && seen.length === 2, { status: rotated.status, calls: seen.length });
+
+const q0 = await req3("GET", "/v1/keys");
+check("a single failure, short of the threshold, does not bench the key",
+  q0.body.queue.find((k: any) => k.masked === mask(keyOf("m"))).benched === false, q0.body.queue);
+
+// `m` failed and was pushed to the back before `n`'s success pushed it
+// further back still, so `m` is the front key again for the next call — see
+// Store.pushToBack. BENCH_THRESHOLD - 1 more identical calls puts it over.
+for (let i = 0; i < BENCH_THRESHOLD - 1; i++) {
+  script = [serverError(), say(`n saves it again ${i}`)];
+  await req3("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, healthToken);
+}
+const q1 = await req3("GET", "/v1/keys");
+const benchedM = q1.body.queue.find((k: any) => k.masked === mask(keyOf("m")));
+check("enough consecutive real failures benches the key, with a reason recorded",
+  benchedM.benched === true && typeof benchedM.benchedReason === "string" && benchedM.benchedReason.length > 0,
+  benchedM);
+check("the benched reason is masked, like every other surface that can echo the provider",
+  !benchedM.benchedReason.includes(keyOf("m")), benchedM.benchedReason);
+
+seen.length = 0;
+script = [say("only n now")];
+await req3("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, healthToken);
+check("normal rotation skips a benched key",
+  seen.length === 1 && seen[0]!.auth === `Bearer ${keyOf("n")}`, seen.map((s) => s.auth));
+
+const q2 = await req3("GET", "/v1/keys");
+const idM = q2.body.queue.find((k: any) => k.masked === mask(keyOf("m"))).id;
+
+check("un-benching a key needs the admin token, not a client token",
+  (await req3("POST", `/v1/keys/${idM}/unbench`, undefined, healthToken)).status === 401);
+
+const unbenched = await req3("POST", `/v1/keys/${idM}/unbench`);
+check("the admin can manually clear a key's benched state",
+  unbenched.status === 200 && unbenched.body.ok === true, unbenched.raw);
+check("un-benching an id that does not exist is a clean 404",
+  (await req3("POST", "/v1/keys/99999/unbench")).status === 404);
+
+const q3 = await req3("GET", "/v1/keys");
+check("the key is reported unbenched again",
+  q3.body.queue.find((k: any) => k.id === idM).benched === false, q3.body.queue);
+
+seen.length = 0;
+script = [say("m is back")];
+await req3("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, healthToken);
+check("a manually un-benched key rejoins rotation",
+  seen.length === 1 && seen[0]!.auth === `Bearer ${keyOf("m")}`, seen.map((s) => s.auth));
+
+console.log("\n── key health: a success resets the counter, and the queue never wedges shut ──");
+
+const db4 = makeD1(schema);
+const store4 = new Store(db4);
+const gateway4 = new Gateway(store4, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps4 = { store: store4, gateway: gateway4, adminToken: "admin-t0ken" };
+const req4 = reqFor(deps4);
+
+await req4("POST", "/v1/keys", { keys: keyOf("p") });
+const issued4 = await req4("POST", "/v1/clients", { name: "solo" });
+const soloToken = issued4.body.token as string;
+
+for (let i = 0; i < BENCH_THRESHOLD - 1; i++) {
+  script = [serverError()];
+  await req4("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, soloToken);
+}
+const q4a = await req4("GET", "/v1/keys");
+check("just short of the threshold, the sole key is still not benched",
+  q4a.body.queue[0].benched === false, q4a.body.queue);
+
+script = [say("recovered")];
+const recovered4 = await req4("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, soloToken);
+check("a success in between is not itself blocked by the near-miss count",
+  recovered4.status === 200, recovered4.raw);
+
+for (let i = 0; i < BENCH_THRESHOLD - 1; i++) {
+  script = [serverError()];
+  await req4("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, soloToken);
+}
+const q4b = await req4("GET", "/v1/keys");
+check("a success resets the count — the same number of failures again is still not enough on its own",
+  q4b.body.queue[0].benched === false, q4b.body.queue);
+
+script = [serverError()];
+await req4("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, soloToken);
+const q4c = await req4("GET", "/v1/keys");
+check("one more failure crosses the threshold and benches the sole key",
+  q4c.body.queue[0].benched === true, q4c.body.queue);
+
+// Every key that exists is now benched. The queue must not collapse to
+// no_keys_configured, as if none were configured — it still owes the caller
+// an actual attempt.
+seen.length = 0;
+script = [say("tried anyway")];
+const despiteBenched = await req4("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, soloToken);
+check("with every key benched, the gateway still attempts the call instead of a bare 503",
+  despiteBenched.status === 200 && seen.length === 1, { status: despiteBenched.status, calls: seen.length });
+
+const q4d = await req4("GET", "/v1/keys");
+check("a success reached through that fallback clears the bench too",
+  q4d.body.queue[0].benched === false, q4d.body.queue);
+
+console.log("\n── key health: a rate limit never counts toward benching ──");
+
+const db5 = makeD1(schema);
+const store5 = new Store(db5);
+const gateway5 = new Gateway(store5, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps5 = { store: store5, gateway: gateway5, adminToken: "admin-t0ken" };
+const req5 = reqFor(deps5);
+
+await req5("POST", "/v1/keys", { keys: keyOf("q") });
+const issued5 = await req5("POST", "/v1/clients", { name: "spent" });
+const spentToken = issued5.body.token as string;
+
+for (let i = 0; i < BENCH_THRESHOLD + 3; i++) {
+  script = [rateLimited()];
+  await req5("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, spentToken);
+}
+const q5 = await req5("GET", "/v1/keys");
+check("well past the bench threshold in rate limits alone, the key is still not benched",
+  q5.body.queue[0].benched === false, q5.body.queue);
 
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");

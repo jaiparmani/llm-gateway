@@ -201,6 +201,16 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       return json(ok ? { ok: true, removed: Number(keyMatch[1]) } : { error: { code: "not_found" } }, ok ? 200 : 404);
     }
 
+    // Manually clears a key's benched state — the same effect a successful
+    // call has, for when an admin has fixed whatever was wrong upstream and
+    // does not want to wait for the all-benched fallback in Gateway.chat to
+    // happen to try it again.
+    const unbenchMatch = /^\/v1\/keys\/(\d+)\/unbench$/.exec(path);
+    if (unbenchMatch && method === "POST") {
+      const ok = await deps.store.clearFailures(Number(unbenchMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+
     if (path === "/v1/clients" && method === "GET") {
       return json({ clients: await deps.store.clients() });
     }

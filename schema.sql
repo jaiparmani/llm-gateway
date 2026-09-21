@@ -19,6 +19,14 @@ CREATE TABLE IF NOT EXISTS api_keys (
     uses                 INTEGER NOT NULL DEFAULT 0,
     last_used_at         TEXT,
     last_rate_limited_at TEXT,
+    -- Real-failure tracking (see migrations/0003 and Gateway.chat) — a 429
+    -- never touches these, only a failure that is actual evidence the key or
+    -- its provider is broken. consecutive_failures resets to 0 on a success;
+    -- crossing BENCH_THRESHOLD in a row sets benched_at, which normal
+    -- rotation then skips until it is cleared, by a success or by hand.
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    benched_at           TEXT,
+    last_failure_reason  TEXT,
     created_at           TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS api_keys_position ON api_keys (position, id);

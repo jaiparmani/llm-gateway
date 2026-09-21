@@ -18,6 +18,11 @@ export interface ApiKeyRow {
   last_used_at: string | null;
   last_rate_limited_at: string | null;
   created_at: string;
+  // Real-failure tracking — see Gateway.chat for what counts as "real" and
+  // BENCH_THRESHOLD below. A 429 never touches these; the key is merely spent.
+  consecutive_failures: number;
+  benched_at: string | null;
+  last_failure_reason: string | null;
 }
 
 /** What the API and UI are allowed to see. Never includes the key. */
@@ -30,6 +35,12 @@ export interface PublicKey {
   lastUsedAt: string | null;
   lastRateLimitedAt: string | null;
   createdAt: string;
+  benched: boolean;
+  benchedAt: string | null;
+  /** The redacted message from the failure that tipped this key into being
+   * benched (or the most recent one since). Never a raw key — everything
+   * stored here already passed through Gateway's redact() on the way in. */
+  benchedReason: string | null;
 }
 
 export interface ClientRow {
@@ -71,8 +82,20 @@ function publicKey(row: ApiKeyRow): PublicKey {
     lastUsedAt: row.last_used_at,
     lastRateLimitedAt: row.last_rate_limited_at,
     createdAt: row.created_at,
+    benched: row.benched_at !== null,
+    benchedAt: row.benched_at,
+    benchedReason: row.last_failure_reason,
   };
 }
+
+/**
+ * Real failures in a row before normal rotation skips a key — see
+ * Gateway.chat for exactly what counts (not a 429, and not on its own an
+ * empty completion). Five is enough to tell "broken" from "unlucky once,"
+ * without silently draining a whole request's worth of attempts on a key
+ * that is merely having a bad run.
+ */
+export const BENCH_THRESHOLD = 5;
 
 export class Store {
   constructor(private db: D1Database) {}
@@ -134,6 +157,50 @@ export class Store {
       )
       .bind(at, rateLimited ? 1 : 0, at, id)
       .run();
+  }
+
+  /**
+   * Records a real failure against a key. Crossing BENCH_THRESHOLD in a row
+   * benches it (`benched_at` set, left alone if already set — the first
+   * crossing is the one worth remembering the time of) so `Gateway.chat`
+   * skips it in normal rotation. `reason` is stored as-is because callers
+   * only ever pass an already-redacted GatewayError message.
+   *
+   * The right-hand sides here see the row as it was before this statement,
+   * so `consecutive_failures + 1` is deliberate — it is what the column is
+   * about to become, not what it already is.
+   */
+  async recordFailure(id: number, reason: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE api_keys
+            SET consecutive_failures = consecutive_failures + 1,
+                last_failure_reason = ?,
+                benched_at = CASE
+                  WHEN consecutive_failures + 1 >= ? AND benched_at IS NULL THEN ?
+                  ELSE benched_at
+                END
+          WHERE id = ?`,
+      )
+      .bind(reason, BENCH_THRESHOLD, now(), id)
+      .run();
+  }
+
+  /**
+   * Clears a key's failure count and bench — what a successful call does on
+   * its own, and what the admin console's manual "un-bench" button asks for
+   * directly, once whatever was wrong upstream is fixed.
+   */
+  async clearFailures(id: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE api_keys
+            SET consecutive_failures = 0, benched_at = NULL, last_failure_reason = NULL
+          WHERE id = ?`,
+      )
+      .bind(id)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
   }
 
   // ── model overrides ──────────────────────────────────────────────────────

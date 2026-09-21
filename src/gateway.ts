@@ -40,6 +40,17 @@ export class BadModelOutput extends GatewayError {
   override code = "bad_model_output";
 }
 
+/**
+ * The provider rejected the request itself (a 400), not the key or the
+ * model behind it. Every key would send the identical body and get the
+ * identical rejection, so this is the one upstream failure `Gateway.chat`
+ * does not rotate past — see the comment there.
+ */
+export class BadRequest extends GatewayError {
+  override status = 400;
+  override code = "bad_request";
+}
+
 export interface Message {
   role: "system" | "user" | "assistant";
   content: string;
@@ -147,9 +158,11 @@ export class Gateway {
       // The provider's own sentence rather than its JSON envelope, and redacted:
       // an upstream that echoes back the credential it rejected must not turn a
       // 401 into the one thing this service never lets out.
-      throw new GatewayError(
-          `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`,
-        );
+      const message = `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
+      // A 400 is the gateway's own request being unacceptable — a parameter
+      // the model does not support, most likely — not a verdict on the key.
+      // See BadRequest and the branch for it in chat().
+      throw response.status === 400 ? new BadRequest(message) : new GatewayError(message);
     }
 
     const payload = (await response.json()) as {
@@ -196,22 +209,48 @@ export class Gateway {
    * call to a different model, so the next key is the cheapest way to reach a
    * different model, and one bad responder in the pool should not fail a
    * request the pool as a whole can serve.
+   *
+   * Everything else the provider (or the network) can throw at a call also
+   * rotates to the next key rather than aborting the whole request — a
+   * network failure, a stale/revoked key (401/403), a model id an admin has
+   * not fixed yet (404), an upstream 5xx. The one exception is `BadRequest`
+   * (a 400): that means this gateway's own request was unacceptable, every
+   * key would get the identical body and the identical rejection, and
+   * rotating would just spend healthy keys to relearn what is already known.
+   *
+   * Unlike a 429 or an empty completion, this class of failure *is* evidence
+   * the key (or its provider) is actually broken, so — 400 aside — it also
+   * counts toward `Store.recordFailure`: enough of them in a row benches the
+   * key, and normal rotation (below) then skips it. A provider-wide problem,
+   * like a retired model id that 404s for every key on that provider, benches
+   * every one of that provider's keys the same way with no separate "provider
+   * health" mechanism needed — the per-key bench already covers it. Benching
+   * is not allowed to wedge the queue shut, though: if every key is currently
+   * benched, this still tries all of them, in the usual order, rather than
+   * behaving as if none were configured. That is simpler than a second,
+   * time-based path back into rotation (mirroring how a 429 resets at its own
+   * reset time) and it self-heals the same way a real fix would — a call that
+   * succeeds clears the bench, exactly like the admin console's manual
+   * "un-bench" button.
    */
   async chat(
     messages: Message[],
     opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
   ): Promise<Completion> {
-    const keys = await this.store.keys();
-    if (keys.length === 0) {
+    const allKeys = await this.store.keys();
+    if (allKeys.length === 0) {
       throw new NoKeysConfigured(
           "No provider key is configured on the gateway. Add one at the admin page.",
         );
     }
+    const active = allKeys.filter((k) => !k.benched_at);
+    const keys = active.length > 0 ? active : allKeys;
 
     const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
     let lastUnusable: BadModelOutput | null = null;
+    let lastHardFailure: GatewayError | null = null;
 
     for (const key of keys) {
       tried.push(key.masked);
@@ -223,6 +262,7 @@ export class Gateway {
         const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider, overrides);
         const completion = await this.post(messages, key, model, opts.maxTokens, !!opts.jsonObject);
         await this.store.pushToBack(key.id, false);
+        await this.store.clearFailures(key.id);
         completion.keysTried = tried;
         return completion;
       } catch (e) {
@@ -233,9 +273,22 @@ export class Gateway {
         }
         if (e instanceof BadModelOutput) {
           // The key worked; the model behind it did not. Spend the call and
-          // move on, so the next attempt lands on a different model.
+          // move on, so the next attempt lands on a different model. Not
+          // counted as a key failure, for the same reason.
           await this.store.pushToBack(key.id, false);
           lastUnusable = e;
+          continue;
+        }
+        if (e instanceof BadRequest) {
+          // Not this key's fault, and every other key would fail identically
+          // — see the class comment. Nothing moves in the queue either: this
+          // attempt never really tested the key.
+          throw e;
+        }
+        if (e instanceof GatewayError) {
+          await this.store.pushToBack(key.id, false);
+          await this.store.recordFailure(key.id, e.message);
+          lastHardFailure = e;
           continue;
         }
         throw e;
@@ -245,6 +298,7 @@ export class Gateway {
     throw (
       lastRateLimit ??
       lastUnusable ??
+      lastHardFailure ??
       new GatewayError("Every configured key was rejected.")
     );
   }
@@ -351,13 +405,20 @@ export class Gateway {
   /** Key queue health. Masked values only — nothing here can make a call. */
   async queueView(): Promise<Record<string, unknown>> {
     const keys = await this.store.publicKeys();
+    // "next" mirrors what chat() would actually do: the front of the active
+    // (unbenched) keys, or — if every key is benched — the front of all of
+    // them, since that is what the fallback in chat() falls back to.
+    const active = keys.filter((k) => !k.benched);
+    const nextId = (active[0] ?? keys[0])?.id;
+    const benchedCount = keys.length - active.length;
     return {
       configured: keys.length,
-      queue: keys.map((k, i) => ({ ...k, next: i === 0 })),
+      queue: keys.map((k) => ({ ...k, next: k.id === nextId })),
       note: keys.length
-        ? `${keys.length} key${keys.length === 1 ? "" : "s"} in rotation. Each call takes the key at ` +
-          "the front and sends it to the back, so the free tier's daily cap multiplies instead of " +
-          "being spent down on one key."
+        ? `${keys.length} key${keys.length === 1 ? "" : "s"} in rotation` +
+          (benchedCount ? `, ${benchedCount} benched after repeated failures` : "") +
+          `. Each call takes the key at the front and sends it to the back, so the free tier's ` +
+          "daily cap multiplies instead of being spent down on one key."
         : "No keys configured — every call will fail with 503 until one is added.",
     };
   }
