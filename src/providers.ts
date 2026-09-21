@@ -54,8 +54,11 @@ export const PROVIDERS: Record<string, ProviderDef> = {
     id: "cerebras",
     label: "Cerebras",
     upstreamUrl: "https://api.cerebras.ai/v1/chat/completions",
-    // No hyphen after "llama" — that is Cerebras's actual model id, not a typo.
-    defaultModel: "llama3.3-70b",
+    // Llama 3.3 70B has been fully retired from Cerebras's catalog — confirmed
+    // against the ground truth, not docs: curl https://api.cerebras.ai/public/v1/models
+    // (unauthenticated). As of writing it lists exactly two models, deprecated:false:
+    // gpt-oss-120b and qwen-3.8-27b.
+    defaultModel: "gpt-oss-120b",
     keyShape: /^csk-[A-Za-z0-9]{32,}$/,
     keyHint: "csk-…",
   },
