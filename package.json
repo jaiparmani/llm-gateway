@@ -14,7 +14,7 @@
     "predev": "node scripts/build-ui.mjs",
     "pretest": "node scripts/build-ui.mjs",
     "db:init": "wrangler d1 execute llm-gateway --remote --file=schema.sql",
-    "db:migrate": "wrangler d1 execute llm-gateway --remote --file=migrations/0001_add_provider.sql"
+    "db:migrate": "wrangler d1 execute llm-gateway --remote --file=migrations/0002_add_provider_models.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",

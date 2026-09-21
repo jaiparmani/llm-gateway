@@ -134,11 +134,14 @@ override straight in D1 (`GET`/`POST /v1/models`). `wrangler.toml`'s
 a lower-priority fallback, mainly for a fresh deployment before anyone has opened the
 console.
 
-**Upgrading an existing deployment:** the `api_keys` table gained a `provider` column.
-Run the migration once, before deploying this version:
+**Upgrading an existing deployment:** each file under [`migrations/`](migrations) is
+applied once, in order — `db:migrate` runs the newest one, so after pulling several
+releases at once, run the older ones by hand first (each file's header has the exact
+`wrangler d1 execute` command):
 
 ```bash
-npm run db:migrate                        # ALTER TABLE — safe to run once
+wrangler d1 execute llm-gateway --remote --file=migrations/0001_add_provider.sql  # if not already applied
+npm run db:migrate                        # applies migrations/0002_add_provider_models.sql
 npm run deploy
 ```
 
