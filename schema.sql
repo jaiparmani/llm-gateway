@@ -27,10 +27,25 @@ CREATE TABLE IF NOT EXISTS api_keys (
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     benched_at           TEXT,
     last_failure_reason  TEXT,
+    -- Lifetime failures, for analytics — unlike consecutive_failures this
+    -- never resets on a success, so it survives what benching forgives.
+    total_failures       INTEGER NOT NULL DEFAULT 0,
+    -- A manual "stop using this key", set from the console. Unlike
+    -- benched_at it is not self-healing and not overridden by the
+    -- all-benched fallback in Gateway.chat — an admin's explicit call is
+    -- respected until they clear it themselves.
+    paused_at            TEXT,
     created_at           TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS api_keys_position ON api_keys (position, id);
 CREATE INDEX IF NOT EXISTS api_keys_provider ON api_keys (provider);
+
+-- The provider-wide equivalent of api_keys.paused_at — existence of a row
+-- means that provider is stopped, regardless of which keys it has.
+CREATE TABLE IF NOT EXISTS paused_providers (
+    provider  TEXT PRIMARY KEY,
+    paused_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS clients (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +72,12 @@ CREATE TABLE IF NOT EXISTS usage (
     client        TEXT    NOT NULL,
     model         TEXT,
     key_masked    TEXT,
+    -- Which provider and which key actually served (or failed) this request —
+    -- key_id is nullable because a request can fail before any key is ever
+    -- tried (no_keys_configured, every provider paused). Lets the ledger be
+    -- broken down per provider and per key, not just per client.
+    provider      TEXT,
+    key_id        INTEGER,
     input_tokens  INTEGER,
     output_tokens INTEGER,
     ok            INTEGER NOT NULL,

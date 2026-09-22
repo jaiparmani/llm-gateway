@@ -23,6 +23,10 @@ export interface ApiKeyRow {
   consecutive_failures: number;
   benched_at: string | null;
   last_failure_reason: string | null;
+  /** Lifetime, unlike consecutive_failures — never reset by a success. */
+  total_failures: number;
+  /** A manual "stop using this key" from the console. See the schema comment. */
+  paused_at: string | null;
 }
 
 /** What the API and UI are allowed to see. Never includes the key. */
@@ -41,6 +45,9 @@ export interface PublicKey {
    * benched (or the most recent one since). Never a raw key — everything
    * stored here already passed through Gateway's redact() on the way in. */
   benchedReason: string | null;
+  totalFailures: number;
+  paused: boolean;
+  pausedAt: string | null;
 }
 
 export interface ClientRow {
@@ -85,6 +92,9 @@ function publicKey(row: ApiKeyRow): PublicKey {
     benched: row.benched_at !== null,
     benchedAt: row.benched_at,
     benchedReason: row.last_failure_reason,
+    totalFailures: row.total_failures,
+    paused: row.paused_at !== null,
+    pausedAt: row.paused_at,
   };
 }
 
@@ -175,6 +185,7 @@ export class Store {
       .prepare(
         `UPDATE api_keys
             SET consecutive_failures = consecutive_failures + 1,
+                total_failures = total_failures + 1,
                 last_failure_reason = ?,
                 benched_at = CASE
                   WHEN consecutive_failures + 1 >= ? AND benched_at IS NULL THEN ?
@@ -201,6 +212,46 @@ export class Store {
       .bind(id)
       .run();
     return (result.meta.changes ?? 0) > 0;
+  }
+
+  /**
+   * A manual "stop using this key" — unlike benching, this is not evidence of
+   * anything and does not clear itself. It stays paused until `resumeKey`.
+   */
+  async pauseKey(id: number): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE api_keys SET paused_at = ? WHERE id = ? AND paused_at IS NULL")
+      .bind(now(), id)
+      .run();
+    // Already paused is not a failure to report — this call still did what
+    // it was asked, the key just got there first.
+    if ((result.meta.changes ?? 0) > 0) return true;
+    const row = await this.db.prepare("SELECT id FROM api_keys WHERE id = ?").bind(id).first<{ id: number }>();
+    return row !== null;
+  }
+
+  async resumeKey(id: number): Promise<boolean> {
+    const result = await this.db.prepare("UPDATE api_keys SET paused_at = NULL WHERE id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  // ── provider pausing ─────────────────────────────────────────────────────
+
+  /** Every provider an admin has manually stopped, regardless of which keys it has. */
+  async pausedProviders(): Promise<Set<string>> {
+    const { results } = await this.db.prepare("SELECT provider FROM paused_providers").all<{ provider: string }>();
+    return new Set((results ?? []).map((r) => r.provider));
+  }
+
+  async pauseProvider(id: string): Promise<void> {
+    await this.db
+      .prepare("INSERT INTO paused_providers (provider, paused_at) VALUES (?, ?) ON CONFLICT(provider) DO NOTHING")
+      .bind(id, now())
+      .run();
+  }
+
+  async resumeProvider(id: string): Promise<void> {
+    await this.db.prepare("DELETE FROM paused_providers WHERE provider = ?").bind(id).run();
   }
 
   // ── model overrides ──────────────────────────────────────────────────────
@@ -273,6 +324,9 @@ export class Store {
     client: string;
     model: string | null;
     keyMasked: string | null;
+    /** Null when the request never reached a key — no_keys_configured, every provider paused. */
+    keyId: number | null;
+    provider: string | null;
     inputTokens: number | null;
     outputTokens: number | null;
     ok: boolean;
@@ -282,11 +336,11 @@ export class Store {
     await this.db.batch([
       this.db
         .prepare(
-          `INSERT INTO usage (at, client, model, key_masked, input_tokens, output_tokens, ok, error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO usage (at, client, model, key_masked, provider, key_id, input_tokens, output_tokens, ok, error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .bind(at, entry.client, entry.model, entry.keyMasked, entry.inputTokens,
-              entry.outputTokens, entry.ok ? 1 : 0, entry.error),
+        .bind(at, entry.client, entry.model, entry.keyMasked, entry.provider, entry.keyId,
+              entry.inputTokens, entry.outputTokens, entry.ok ? 1 : 0, entry.error),
       this.db
         .prepare("UPDATE clients SET calls = calls + 1, last_seen = ? WHERE name = ?")
         .bind(at, entry.client),
@@ -310,9 +364,33 @@ export class Store {
            FROM usage`,
       )
       .first<Record<string, number>>();
-    const { results } = await this.db
+    const { results: byClient } = await this.db
       .prepare("SELECT client, COUNT(*) AS calls, COALESCE(SUM(ok), 0) AS ok FROM usage GROUP BY client ORDER BY calls DESC")
       .all();
-    return { ...(totals ?? { calls: 0, ok: 0, input_tokens: 0, output_tokens: 0 }), byClient: results ?? [] };
+    // provider/key_id are null on a request that never reached a key (no
+    // keys configured, every provider paused) — excluded here since there is
+    // nothing to attribute a breakdown row to.
+    const { results: byProvider } = await this.db
+      .prepare(
+        `SELECT provider, COUNT(*) AS calls, COALESCE(SUM(ok), 0) AS ok,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens
+           FROM usage WHERE provider IS NOT NULL GROUP BY provider ORDER BY calls DESC`,
+      )
+      .all();
+    const { results: byKey } = await this.db
+      .prepare(
+        `SELECT key_id, key_masked, provider, COUNT(*) AS calls, COALESCE(SUM(ok), 0) AS ok,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens
+           FROM usage WHERE key_id IS NOT NULL GROUP BY key_id ORDER BY calls DESC`,
+      )
+      .all();
+    return {
+      ...(totals ?? { calls: 0, ok: 0, input_tokens: 0, output_tokens: 0 }),
+      byClient: byClient ?? [],
+      byProvider: byProvider ?? [],
+      byKey: byKey ?? [],
+    };
   }
 }

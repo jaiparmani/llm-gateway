@@ -81,6 +81,24 @@ never wedge the queue shut, either — if every key ends up benched at once, the
 still tries all of them rather than answering as if none were configured; a success
 clears the bench the same way the console's manual "un-bench" does.
 
+**Pausing a key or a whole provider, by hand.** Benching is automatic and evidence-driven
+— it only ever happens after real failures, and it heals itself. Sometimes you want the
+opposite: to stop using something for a reason the gateway has no way to detect, like a
+provider you are done trusting for now or a key you want held in reserve. `POST
+/v1/keys/{id}/pause` (and `/v1/providers/{id}/pause`) does that — unlike a bench, it does
+not clear on a success and is not overridden by the all-benched fallback in `chat()`; an
+admin's explicit "stop" is respected even if it means every key is currently unusable.
+Pausing a provider stops every key on it at once, present and future, without touching
+any individual key's own state — resuming the provider brings them all back exactly as
+they were.
+
+**Usage broken down per provider and per key, not just per client.** Every ledger row
+already knew which client called; it now also carries which provider and which key
+actually served (or failed) it, redacted the same way everything else here is. `GET
+/v1/usage` reports calls, success rate and token counts grouped each way, so "is this
+provider worth keeping" or "is this key pulling its weight" is a number you can read
+rather than a guess.
+
 **Surviving the free pool.** The default `openrouter/free` model routes every call to
 a different model. Some wrap the object in prose, some emit a `<think>` block
 containing its own braces, some ignore JSON mode entirely and fence the whole reply.
@@ -115,13 +133,15 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 |---|---|
 | `POST /v1/chat/completions` | **OpenAI-shaped.** An existing OpenRouter client moves here by changing one URL and one key. |
 | `POST /v1/json` | Salvages and validates server-side; returns a parsed object. |
-| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Each key reports whether it is currently benched and why. Admin token. Masked values only. |
+| `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Each key reports whether it is currently benched or paused, and why. Admin token. Masked values only. |
 | `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
 | `POST /v1/keys/{id}/unbench` | Manually clears a key's benched state — the same effect a successful call has, for after you've fixed whatever was wrong upstream. Admin token. |
-| `GET /v1/providers` | The provider registry — id, label, and what a key looks like. Public, no secrets in it. |
+| `POST /v1/keys/{id}/pause` · `/resume` | Manually stops (or restarts) rotation from using one key. Unlike unbench, not evidence-driven and does not self-heal. Admin token. |
+| `GET /v1/providers` | The provider registry — id, label, what a key looks like, and whether it's paused. Public, no secrets in it. |
+| `POST /v1/providers/{id}/pause` · `/resume` | Stops (or restarts) rotation from using every key on one provider at once, present and future. Admin token. |
 | `GET /v1/models` · `POST` | Each provider's effective model and any override. `POST {provider, model}` sets one; an empty `model` clears it. Admin token. |
 | `GET /v1/clients` · `POST` · `DELETE /v1/clients/{name}` | Issue and revoke client tokens. Admin token. |
-| `GET /v1/usage` | Per-client and per-key accounting. Admin token. |
+| `GET /v1/usage` | Accounting per client, per provider, and per key. Admin token. |
 | `GET /health` | Public. |
 | `GET /` | The console: add keys, test them, issue tokens, read the ledger. |
 | `GET /chat` | A chat page, on a client token, for actually using the thing. |
@@ -160,7 +180,8 @@ releases at once, run the older ones by hand first (each file's header has the e
 ```bash
 wrangler d1 execute llm-gateway --remote --file=migrations/0001_add_provider.sql          # if not already applied
 wrangler d1 execute llm-gateway --remote --file=migrations/0002_add_provider_models.sql   # if not already applied
-npm run db:migrate                        # applies migrations/0003_add_key_health.sql
+wrangler d1 execute llm-gateway --remote --file=migrations/0003_add_key_health.sql        # if not already applied
+npm run db:migrate                        # applies migrations/0004_analytics_and_pausing.sql
 npm run deploy
 ```
 
@@ -168,7 +189,9 @@ Every key already stored was an OpenRouter key — the only provider that existe
 this — so migration 0001's default backfills them correctly with nothing further to do.
 Migration 0003 backfills every existing key as unbenched with zero failures, which is
 correct for the same reason: nothing about a key's history before the upgrade should
-count toward benching it now.
+count toward benching it now. Migration 0004 backfills every key as unpaused with zero
+lifetime failures, and every usage row simply gets no provider/key attribution — the
+truthful history for calls made before per-provider and per-key breakdowns existed.
 
 ## Migrating keys in
 
@@ -222,10 +245,12 @@ account, and nothing in this repo ever holds one.
 npm test
 ```
 
-97 checks: the salvaging, the rotation across one provider and across several, key
+121 checks: the salvaging, the rotation across one provider and across several, key
 health — rotating past a hard failure, benching one that keeps failing, a success
 resetting the count, a 429 never counting toward it, and the queue never wedging shut
-even with every key benched — model overrides taking effect on the very next call, the
-retry, the auth, the accounting, and on every surface that returns anything, an
-assertion that a key is not in it. They run against real SQL — a `node:sqlite` stand-in
-for D1 — rather than a fake that agrees with whatever the code happens to do.
+even with every key benched — manually pausing a key and a whole provider (and that a
+paused key is never used even as an all-benched last resort), per-provider and per-key
+usage breakdowns, model overrides taking effect on the very next call, the retry, the
+auth, the accounting, and on every surface that returns anything, an assertion that a
+key is not in it. They run against real SQL — a `node:sqlite` stand-in for D1 — rather
+than a fake that agrees with whatever the code happens to do.

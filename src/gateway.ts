@@ -19,6 +19,10 @@ export class GatewayError extends Error {
   status = 502;
   code = "upstream_error";
   extra: Record<string, unknown> = {};
+  /** Which key (if any) this failure happened on — set by `attributed()` in `post()`, for the usage ledger. */
+  keyId: number | null = null;
+  keyMasked: string | null = null;
+  provider: string | null = null;
 }
 
 export class NoKeysConfigured extends GatewayError {
@@ -72,7 +76,9 @@ export interface Completion {
   model: string;
   inputTokens: number | null;
   outputTokens: number | null;
+  keyId: number;
   keyMasked: string;
+  provider: string;
   attempts: number;
   keysTried: string[];
 }
@@ -147,12 +153,12 @@ export class Gateway {
         signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
       });
     } catch (e) {
-      throw new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`);
+      throw attributed(new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`), key);
     }
 
     if (response.status === 429) {
       const { message, resetAt } = await rateLimitDetails(response);
-      throw new RateLimited(message, resetAt);
+      throw attributed(new RateLimited(message, resetAt), key);
     }
     if (!response.ok) {
       // The provider's own sentence rather than its JSON envelope, and redacted:
@@ -162,7 +168,7 @@ export class Gateway {
       // A 400 is the gateway's own request being unacceptable — a parameter
       // the model does not support, most likely — not a verdict on the key.
       // See BadRequest and the branch for it in chat().
-      throw response.status === 400 ? new BadRequest(message) : new GatewayError(message);
+      throw attributed(response.status === 400 ? new BadRequest(message) : new GatewayError(message), key);
     }
 
     const payload = (await response.json()) as {
@@ -176,11 +182,14 @@ export class Gateway {
     // Taking the reasoning is worse than a clean answer and better than nothing.
     const content = message?.content || message?.reasoning;
     if (!content) {
-      throw new BadModelOutput(
-        `${payload.model ?? model} returned an empty message` +
-          (payload.usage?.completion_tokens
-            ? ` after ${payload.usage.completion_tokens} tokens — it likely spent the budget reasoning.`
-            : "."),
+      throw attributed(
+        new BadModelOutput(
+          `${payload.model ?? model} returned an empty message` +
+            (payload.usage?.completion_tokens
+              ? ` after ${payload.usage.completion_tokens} tokens — it likely spent the budget reasoning.`
+              : "."),
+        ),
+        key,
       );
     }
 
@@ -189,7 +198,9 @@ export class Gateway {
       model: payload.model ?? model,
       inputTokens: payload.usage?.prompt_tokens ?? null,
       outputTokens: payload.usage?.completion_tokens ?? null,
+      keyId: key.id,
       keyMasked: key.masked,
+      provider: key.provider,
       attempts: 1,
       keysTried: [],
     };
@@ -232,6 +243,14 @@ export class Gateway {
    * reset time) and it self-heals the same way a real fix would — a call that
    * succeeds clears the bench, exactly like the admin console's manual
    * "un-bench" button.
+   *
+   * A manual pause — of a key, or of a whole provider — is a different kind
+   * of exclusion and sits above all of this: it is an admin's explicit "stop
+   * using this," not evidence of anything, and it does not self-heal or fall
+   * back the way benching does. If every key is paused (or belongs to a
+   * paused provider), this throws rather than quietly using one anyway —
+   * unlike benching, overriding an admin's own instruction "for safety"
+   * would be the wrong call.
    */
   async chat(
     messages: Message[],
@@ -243,8 +262,15 @@ export class Gateway {
           "No provider key is configured on the gateway. Add one at the admin page.",
         );
     }
-    const active = allKeys.filter((k) => !k.benched_at);
-    const keys = active.length > 0 ? active : allKeys;
+    const pausedProviders = await this.store.pausedProviders();
+    const usable = allKeys.filter((k) => !k.paused_at && !pausedProviders.has(k.provider));
+    if (usable.length === 0) {
+      throw new NoKeysConfigured(
+          "Every key is paused, or belongs to a paused provider. Resume at least one from the console.",
+        );
+    }
+    const active = usable.filter((k) => !k.benched_at);
+    const keys = active.length > 0 ? active : usable;
 
     const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
@@ -405,18 +431,27 @@ export class Gateway {
   /** Key queue health. Masked values only — nothing here can make a call. */
   async queueView(): Promise<Record<string, unknown>> {
     const keys = await this.store.publicKeys();
-    // "next" mirrors what chat() would actually do: the front of the active
-    // (unbenched) keys, or — if every key is benched — the front of all of
-    // them, since that is what the fallback in chat() falls back to.
-    const active = keys.filter((k) => !k.benched);
-    const nextId = (active[0] ?? keys[0])?.id;
-    const benchedCount = keys.length - active.length;
+    const pausedProviders = await this.store.pausedProviders();
+    // Mirrors chat()'s own two-stage filter: a paused key or a paused
+    // provider is never "next" — not even as a last resort — and only within
+    // what is left does an unbenched key win out over a benched one.
+    const usable = keys.filter((k) => !k.paused && !pausedProviders.has(k.provider));
+    const active = usable.filter((k) => !k.benched);
+    const nextPool = active.length > 0 ? active : usable;
+    const nextId = nextPool[0]?.id;
+    const benchedCount = keys.filter((k) => k.benched).length;
+    const pausedCount = keys.length - usable.length;
     return {
       configured: keys.length,
-      queue: keys.map((k) => ({ ...k, next: k.id === nextId })),
+      queue: keys.map((k) => ({
+        ...k,
+        next: k.id === nextId,
+        providerPaused: pausedProviders.has(k.provider),
+      })),
       note: keys.length
         ? `${keys.length} key${keys.length === 1 ? "" : "s"} in rotation` +
           (benchedCount ? `, ${benchedCount} benched after repeated failures` : "") +
+          (pausedCount ? `, ${pausedCount} paused` : "") +
           `. Each call takes the key at the front and sends it to the back, so the free tier's ` +
           "daily cap multiplies instead of being spent down on one key."
         : "No keys configured — every call will fail with 503 until one is added.",
@@ -458,6 +493,14 @@ export class Gateway {
  */
 function redact(text: string, key: ApiKeyRow): string {
   return text.split(key.key).join(key.masked);
+}
+
+/** Tags a thrown error with which key it happened on, for the usage ledger. */
+function attributed<E extends GatewayError>(err: E, key: ApiKeyRow): E {
+  err.keyId = key.id;
+  err.keyMasked = key.masked;
+  err.provider = key.provider;
+  return err;
 }
 
 /** The provider's own sentence where there is one, the raw body where not. */

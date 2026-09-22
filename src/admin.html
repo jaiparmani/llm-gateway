@@ -111,6 +111,16 @@
       </div>
 
       <div class="card">
+        <p class="eyebrow">Providers</p>
+        <p class="muted" style="margin:0 0 13px">
+          Pause a provider to stop rotation from using any of its keys — present and future — without
+          touching their individual state. Unlike a benched key, a pause does not clear itself; resume it
+          by hand once you're ready.
+        </p>
+        <div id="providerList"></div>
+      </div>
+
+      <div class="card">
         <p class="eyebrow">Default models</p>
         <p class="muted" style="margin:0 0 13px">
           What each provider is asked for when nothing more specific applies. Providers rename and
@@ -146,7 +156,12 @@
       <div class="card">
         <p class="eyebrow">Usage</p>
         <div class="grid" id="summary"></div>
-        <div style="margin-top:20px;overflow-x:auto"><table id="recent"></table></div>
+        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <div style="overflow-x:auto"><table id="byProvider"></table></div>
+        <p class="dim" style="margin:16px 0 6px">By key</p>
+        <div style="overflow-x:auto"><table id="byKey"></table></div>
+        <p class="dim" style="margin:16px 0 6px">Recent calls</p>
+        <div style="overflow-x:auto"><table id="recent"></table></div>
       </div>
     </div>
   </div>
@@ -224,6 +239,28 @@
     $("#keyInput").placeholder = hint ? `${hint}\n${hint}` : "Paste keys here";
   }
   loadProviders();
+
+  async function drawProviders() {
+    await loadProviders(); // refreshes `providers` (paused state included) and the add-keys picker together
+    $("#providerList").innerHTML = providers.map((p) => `
+      <div class="item">
+        <div class="grow">
+          <b>${esc(p.label)}</b>
+          ${p.paused ? '<span class="tag" style="margin-left:7px;background:rgba(251,113,133,.14);color:var(--rose)">paused</span>' : ""}
+        </div>
+        <button class="btn small" data-provider-toggle="${esc(p.id)}" data-paused="${p.paused}">${p.paused ? "Resume" : "Pause"}</button>
+      </div>`).join("");
+
+    document.querySelectorAll("[data-provider-toggle]").forEach((b) => (b.onclick = async () => {
+      const id = b.dataset.providerToggle;
+      const wasPaused = b.dataset.paused === "true";
+      b.disabled = true;
+      try {
+        await api("/v1/providers/" + id + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" });
+        await load(); // a provider pause also changes the rotation queue's next/paused indicators
+      } catch (e) { alert(e.message); b.disabled = false; }
+    }));
+  }
 
   async function api(path, options = {}) {
     const res = await fetch(path, {
@@ -322,16 +359,26 @@
           <span class="tag" style="margin-left:7px">${esc(providerLabel(x.provider))}</span>
           ${x.next ? '<span class="tag" style="margin-left:5px">next</span>' : ""}
           <div class="dim" style="margin-top:3px">
-            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.label ? " &middot; " + esc(x.label) : ""}
+            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.totalFailures ? " &middot; " + x.totalFailures + " failure" + (x.totalFailures === 1 ? "" : "s") + " lifetime" : ""}${x.label ? " &middot; " + esc(x.label) : ""}
             ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
           </div>
           ${x.benched ? '<div class="bad" style="margin-top:3px;font-size:11.5px">benched — skipped by rotation' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 140)) : "") + "</div>" : ""}
+          ${x.paused ? '<div class="bad" style="margin-top:3px;font-size:11.5px">paused by hand — skipped by rotation</div>' : ""}
+          ${!x.paused && x.providerPaused ? '<div class="warn" style="margin-top:3px;font-size:11.5px">its provider is paused — skipped by rotation</div>' : ""}
           <div class="probe" data-probe="${x.id}" hidden></div>
         </div>
         ${x.benched ? `<button class="btn small" data-unbench="${x.id}">Un-bench</button>` : ""}
+        <button class="btn small" data-key-toggle="${x.id}" data-paused="${x.paused}">${x.paused ? "Resume" : "Pause"}</button>
         <button class="btn small" data-test="${x.id}">Test</button>
         <button class="btn danger small" data-del="${x.id}">Remove</button>
       </div>`).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
+
+    document.querySelectorAll("[data-key-toggle]").forEach((b) => (b.onclick = async () => {
+      const wasPaused = b.dataset.paused === "true";
+      b.disabled = true;
+      try { await api("/v1/keys/" + b.dataset.keyToggle + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" }); await load(); }
+      catch (e) { alert(e.message); b.disabled = false; }
+    }));
 
     document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
       const out = document.querySelector('[data-probe="' + b.dataset.test + '"]');
@@ -358,6 +405,7 @@
     }));
 
     await drawModels();
+    await drawProviders();
 
     const c = await api("/v1/clients");
     $("#clients").innerHTML = c.clients.length ? c.clients.map((x) => `
@@ -381,6 +429,21 @@
       <div><div class="k">Failed</div><div class="v ${s.calls - s.ok ? "warn" : ""}">${s.calls - s.ok}</div></div>
       <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
       <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
+
+    const rate = (calls, ok) => calls ? Math.round((100 * ok) / calls) + "%" : "—";
+    $("#byProvider").innerHTML = s.byProvider?.length
+      ? `<tr><th>Provider</th><th>Calls</th><th>Success</th><th>Tokens in</th><th>Tokens out</th></tr>` + s.byProvider.map((p) => `
+        <tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.calls}</td>
+        <td class="num">${rate(p.calls, p.ok)}</td>
+        <td class="num">${p.input_tokens.toLocaleString()}</td><td class="num">${p.output_tokens.toLocaleString()}</td></tr>`).join("")
+      : `<tr><td class="dim">Nothing yet.</td></tr>`;
+    $("#byKey").innerHTML = s.byKey?.length
+      ? `<tr><th>Key</th><th>Provider</th><th>Calls</th><th>Success</th><th>Tokens in</th><th>Tokens out</th></tr>` + s.byKey.map((k) => `
+        <tr><td>${esc(k.key_masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.calls}</td>
+        <td class="num">${rate(k.calls, k.ok)}</td>
+        <td class="num">${k.input_tokens.toLocaleString()}</td><td class="num">${k.output_tokens.toLocaleString()}</td></tr>`).join("")
+      : `<tr><td class="dim">Nothing yet.</td></tr>`;
+
     $("#recent").innerHTML = u.recent.length
       ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
         <tr><td>${esc(when(r.at))}</td><td>${esc(r.client)}</td>

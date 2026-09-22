@@ -578,6 +578,143 @@ const q5 = await req5("GET", "/v1/keys");
 check("well past the bench threshold in rate limits alone, the key is still not benched",
   q5.body.queue[0].benched === false, q5.body.queue);
 
+console.log("\n── pausing a key manually, distinct from benching ──");
+
+const db6 = makeD1(schema);
+const store6 = new Store(db6);
+const gateway6 = new Gateway(store6, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps6 = { store: store6, gateway: gateway6, adminToken: "admin-t0ken" };
+const req6 = reqFor(deps6);
+
+const addedA = await req6("POST", "/v1/keys", { keys: keyOf("m") });
+const idPause = addedA.body.added[0].id;
+await req6("POST", "/v1/keys", { keys: keyOf("n") });
+const issued6 = await req6("POST", "/v1/clients", { name: "pausing" });
+const pausingToken = issued6.body.token as string;
+
+check("pausing a key needs the admin token, not a client token",
+  (await req6("POST", `/v1/keys/${idPause}/pause`, undefined, pausingToken)).status === 401);
+
+const paused = await req6("POST", `/v1/keys/${idPause}/pause`);
+check("the admin can manually pause a key", paused.status === 200 && paused.body.ok === true, paused.raw);
+
+const pausingIsIdempotent = await req6("POST", `/v1/keys/${idPause}/pause`);
+check("pausing an already-paused key is still a success, not a 404",
+  pausingIsIdempotent.status === 200, pausingIsIdempotent.raw);
+
+const qAfterPause = await req6("GET", "/v1/keys");
+check("the queue reports the key as paused",
+  qAfterPause.body.queue.find((k: any) => k.id === idPause).paused === true, qAfterPause.body.queue);
+check("a paused key is never reported as next",
+  qAfterPause.body.queue.find((k: any) => k.id === idPause).next === false, qAfterPause.body.queue);
+
+seen.length = 0;
+script = [say("from n, not m")];
+await req6("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, pausingToken);
+check("normal rotation skips a paused key entirely",
+  keysUsed().length === 1 && keysUsed()[0] === keyOf("n"), keysUsed().map(mask));
+
+// Drive every OTHER key into being benched, so the "all benched" fallback in
+// Gateway.chat would normally kick in — except the paused key must still be
+// excluded, unlike a merely-benched one.
+seen.length = 0;
+for (let i = 0; i < BENCH_THRESHOLD; i++) {
+  script = [{ status: 500, body: { error: { message: "provider down" } } }];
+  await req6("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, pausingToken);
+}
+seen.length = 0;
+script = [say("still from n")];
+await req6("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, pausingToken);
+check("even when every OTHER key is benched, a paused key is not used as a last resort",
+  keysUsed().every((k) => k !== keyOf("m")), keysUsed().map(mask));
+
+const resumed = await req6("POST", `/v1/keys/${idPause}/resume`);
+check("the admin can resume a paused key", resumed.status === 200 && resumed.body.ok === true, resumed.raw);
+const qAfterResume = await req6("GET", "/v1/keys");
+check("the key is reported unpaused again",
+  qAfterResume.body.queue.find((k: any) => k.id === idPause).paused === false, qAfterResume.body.queue);
+
+check("resuming an id that does not exist is a clean 404",
+  (await req6("POST", "/v1/keys/99999/resume")).status === 404);
+
+console.log("\n── pausing a whole provider ──");
+
+const db7 = makeD1(schema);
+const store7 = new Store(db7);
+const gateway7 = new Gateway(store7, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps7 = { store: store7, gateway: gateway7, adminToken: "admin-t0ken" };
+const req7 = reqFor(deps7);
+
+await req7("POST", "/v1/keys", { keys: `${keyOf("p")}\n${keyOf("q")}` });
+const issued7 = await req7("POST", "/v1/clients", { name: "provider-pause" });
+const providerPauseToken = issued7.body.token as string;
+
+check("pausing a provider needs the admin token, not a client token",
+  (await req7("POST", "/v1/providers/openrouter/pause", undefined, providerPauseToken)).status === 401);
+check("pausing an unknown provider is a clean 404",
+  (await req7("POST", "/v1/providers/not-a-provider/pause")).status === 404);
+
+const providerPaused = await req7("POST", "/v1/providers/openrouter/pause");
+check("the admin can pause a whole provider", providerPaused.status === 200 && providerPaused.body.paused === true, providerPaused.raw);
+
+const listAfterPause = await req7("GET", "/v1/providers", undefined, "");
+check("the public provider listing reflects the pause",
+  listAfterPause.body.providers.find((p: any) => p.id === "openrouter").paused === true, listAfterPause.body.providers);
+
+const stillNoKey = await req7("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, providerPauseToken);
+check("every key belonging to the paused provider is refused — even though keys exist, not a stale no_keys_configured",
+  stillNoKey.status === 503 && stillNoKey.body.error.code === "no_keys_configured", stillNoKey.raw);
+
+const qWhilePaused = await req7("GET", "/v1/keys");
+check("no key of the paused provider is reported as next",
+  qWhilePaused.body.queue.every((k: any) => k.next === false), qWhilePaused.body.queue);
+
+const providerResumed = await req7("POST", "/v1/providers/openrouter/resume");
+check("the admin can resume a paused provider", providerResumed.status === 200 && providerResumed.body.paused === false, providerResumed.raw);
+
+seen.length = 0;
+script = [say("back in rotation")];
+const afterResumeCall = await req7("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, providerPauseToken);
+check("calls succeed again once the provider is resumed",
+  afterResumeCall.status === 200 && seen.length === 1, { status: afterResumeCall.status, calls: seen.length });
+
+console.log("\n── per-provider and per-key analytics ──");
+
+const db8 = makeD1(schema);
+const store8 = new Store(db8);
+const gateway8 = new Gateway(store8, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const deps8 = { store: store8, gateway: gateway8, adminToken: "admin-t0ken" };
+const req8 = reqFor(deps8);
+
+const addedR = await req8("POST", "/v1/keys", { keys: keyOf("r") });
+const idR = addedR.body.added[0].id;
+const issued8 = await req8("POST", "/v1/clients", { name: "analytics" });
+const analyticsToken = issued8.body.token as string;
+
+script = [say("ok", "stub/model-a")];
+await req8("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, analyticsToken);
+script = [{ status: 500, body: { error: { message: "boom" } } }];
+await req8("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, analyticsToken);
+
+const analytics = await req8("GET", "/v1/usage");
+const providerRow = analytics.body.summary.byProvider.find((p: any) => p.provider === "openrouter");
+check("usage is broken down per provider, across both the success and the failure",
+  providerRow?.calls === 2 && providerRow?.ok === 1, analytics.body.summary.byProvider);
+
+const keyRow = analytics.body.summary.byKey.find((k: any) => k.key_id === idR);
+check("usage is broken down per key too, attributed even on the failing call",
+  keyRow?.calls === 2 && keyRow?.ok === 1 && keyRow?.key_masked === mask(keyOf("r")), analytics.body.summary.byKey);
+check("the per-key breakdown never leaks a whole key",
+  !analytics.raw.includes(keyOf("r")), "leaked");
+
+await req8("POST", "/v1/providers/openrouter/pause");
+const failedBeforeAnyKey = await req8("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, analyticsToken);
+check("a request that never reaches a key is recorded without crashing the ledger",
+  failedBeforeAnyKey.status === 503, failedBeforeAnyKey.raw);
+const analytics2 = await req8("GET", "/v1/usage");
+check("a request attributed to no key does not add a phantom row to the per-key breakdown",
+  analytics2.body.summary.byKey.length === 1, analytics2.body.summary.byKey);
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

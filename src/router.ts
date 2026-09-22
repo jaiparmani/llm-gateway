@@ -35,10 +35,18 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
 
   // Which providers a key can be added for. No secrets in it, so it is public
   // the same way /health is — the admin console uses it to build the "add
-  // keys" provider picker without hard-coding the list twice.
+  // keys" provider picker without hard-coding the list twice. `paused` is
+  // included too — that state isn't sensitive, only changing it is (gated
+  // below), and the console needs it to render the pause/resume toggle.
   if (path === "/v1/providers" && method === "GET") {
+    const paused = await deps.store.pausedProviders();
     return json({
-      providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label, keyHint: p.keyHint })),
+      providers: Object.values(PROVIDERS).map((p) => ({
+        id: p.id,
+        label: p.label,
+        keyHint: p.keyHint,
+        paused: paused.has(p.id),
+      })),
     });
   }
 
@@ -79,7 +87,10 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
             expectKey: body.expect_key,
             maxAttempts: body.max_attempts,
           });
-          await record(deps, client, completion, null);
+          await record(deps, client, {
+            model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
+            inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+          });
           return json({
             data,
             model: completion.model,
@@ -94,7 +105,10 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           maxTokens: body.max_tokens,
           jsonObject: body.response_format?.type === "json_object",
         });
-        await record(deps, client, completion, null);
+        await record(deps, client, {
+          model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
+          inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+        });
         return json({
           id: `gw-${Date.now().toString(16)}`,
           object: "chat.completion",
@@ -112,7 +126,10 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         });
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, client, null, e.message);
+          await record(deps, client, {
+            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+            inputTokens: null, outputTokens: null, ok: false, error: e.message,
+          });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
         throw e;
@@ -122,7 +139,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     // ── management: admin token only ────────────────────────────────────────
     if (
       path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
-      path === "/v1/usage" || path === "/v1/models"
+      path === "/v1/usage" || path === "/v1/models" ||
+      /^\/v1\/providers\/[^/]+\/(pause|resume)$/.test(path)
     ) {
       if (!deps.adminToken) {
         return json({ error: { code: "no_admin_token", message: "ADMIN_TOKEN is not set, so management is disabled." } }, 503);
@@ -211,6 +229,39 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
     }
 
+    // Manual "stop using this key" — unlike unbench above, not evidence-
+    // driven and not self-healing. See the schema comment on paused_at.
+    const keyPauseMatch = /^\/v1\/keys\/(\d+)\/pause$/.exec(path);
+    if (keyPauseMatch && method === "POST") {
+      const ok = await deps.store.pauseKey(Number(keyPauseMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+
+    const keyResumeMatch = /^\/v1\/keys\/(\d+)\/resume$/.exec(path);
+    if (keyResumeMatch && method === "POST") {
+      const ok = await deps.store.resumeKey(Number(keyResumeMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+
+    // The provider-wide equivalent — stops every key on that provider at
+    // once, present and future, without touching any individual key's own
+    // paused/benched state.
+    const providerPauseMatch = /^\/v1\/providers\/([^/]+)\/pause$/.exec(path);
+    if (providerPauseMatch && method === "POST") {
+      const id = providerPauseMatch[1]!;
+      if (!isKnownProvider(id)) return json({ error: { code: "not_found", message: "No provider with that id." } }, 404);
+      await deps.store.pauseProvider(id);
+      return json({ ok: true, provider: id, paused: true });
+    }
+
+    const providerResumeMatch = /^\/v1\/providers\/([^/]+)\/resume$/.exec(path);
+    if (providerResumeMatch && method === "POST") {
+      const id = providerResumeMatch[1]!;
+      if (!isKnownProvider(id)) return json({ error: { code: "not_found", message: "No provider with that id." } }, 404);
+      await deps.store.resumeProvider(id);
+      return json({ ok: true, provider: id, paused: false });
+    }
+
     if (path === "/v1/clients" && method === "GET") {
       return json({ clients: await deps.store.clients() });
     }
@@ -253,17 +304,18 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
   }
 }
 
-async function record(deps: RouterDeps, client: string, completion: { model: string; keyMasked: string; inputTokens: number | null; outputTokens: number | null } | null, error: string | null) {
+async function record(deps: RouterDeps, client: string, entry: {
+  model: string | null;
+  keyMasked: string | null;
+  keyId: number | null;
+  provider: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  ok: boolean;
+  error: string | null;
+}) {
   try {
-    await deps.store.record({
-      client,
-      model: completion?.model ?? null,
-      keyMasked: completion?.keyMasked ?? null,
-      inputTokens: completion?.inputTokens ?? null,
-      outputTokens: completion?.outputTokens ?? null,
-      ok: error === null,
-      error,
-    });
+    await deps.store.record({ client, ...entry });
   } catch {
     // Accounting must never be the reason an answer does not reach the caller.
   }
