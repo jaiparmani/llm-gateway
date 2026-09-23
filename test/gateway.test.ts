@@ -715,6 +715,62 @@ const analytics2 = await req8("GET", "/v1/usage");
 check("a request attributed to no key does not add a phantom row to the per-key breakdown",
   analytics2.body.summary.byKey.length === 1, analytics2.body.summary.byKey);
 
+console.log("\n── embeddings: only reach a provider that has the endpoint ──");
+
+const embeddingsUrl = upstreamUrl.replace("/v1/chat/completions", "/v1/embeddings");
+const mistralKeyOf = (n: string) => n.repeat(32).slice(0, 32);
+const vectors = (...values: number[][]) => ({
+  status: 200,
+  body: { model: "mistral-embed", usage: { prompt_tokens: 6 }, data: values.map((embedding, index) => ({ embedding, index })) },
+});
+
+const db9 = makeD1(schema);
+const store9 = new Store(db9);
+const gateway9 = new Gateway(store9, { defaultModel: "stub/default", upstreamUrl, embeddingsUrl, timeoutMs: 5000 });
+const deps9 = { store: store9, gateway: gateway9, adminToken: "admin-t0ken" };
+const req9 = reqFor(deps9);
+
+const issued9 = await req9("POST", "/v1/clients", { name: "vectors" });
+const vectorsToken = issued9.body.token as string;
+
+const embedNoKeys = await req9("POST", "/v1/embeddings", { input: "hello" }, vectorsToken);
+check("with only chat-only providers configured, embeddings is a clean no_keys_configured",
+  embedNoKeys.status === 503 && embedNoKeys.body.error.code === "no_keys_configured", embedNoKeys.raw);
+
+await req9("POST", "/v1/keys", { keys: keyOf("e") }); // openrouter — chat-only, must be skipped
+await req9("POST", "/v1/keys", { keys: mistralKeyOf("m"), provider: "mistral" });
+
+const badInput = await req9("POST", "/v1/embeddings", { input: "" }, vectorsToken);
+check("an empty string input is refused", badInput.status === 400 && badInput.body.error.code === "validation_failed", badInput.raw);
+
+const badInput2 = await req9("POST", "/v1/embeddings", { input: [] }, vectorsToken);
+check("an empty array input is refused", badInput2.status === 400 && badInput2.body.error.code === "validation_failed", badInput2.raw);
+
+seen.length = 0;
+script = [vectors([0.1, 0.2, 0.3])];
+const embedded = await req9("POST", "/v1/embeddings", { input: "remember this" }, vectorsToken);
+check("a single string embeds through the mistral-shaped key, skipping the openrouter one",
+  embedded.status === 200 && seen.length === 1 && seen[0]!.auth === `Bearer ${mistralKeyOf("m")}`, embedded.raw);
+check("the vector comes back in OpenAI's {data:[{embedding,index}]} shape",
+  JSON.stringify(embedded.body.data[0].embedding) === "[0.1,0.2,0.3]" && embedded.body.data[0].index === 0, embedded.raw);
+check("the embeddings call used mistral's registry default model, not openrouter's",
+  seen[0]!.body.model === "mistral-embed", seen[0]?.body);
+
+seen.length = 0;
+script = [vectors([1, 0], [0, 1])];
+const embeddedBatch = await req9("POST", "/v1/embeddings", { input: ["a", "b"] }, vectorsToken);
+check("a batch of strings returns one vector per input, in order",
+  embeddedBatch.body.data.length === 2 && embeddedBatch.body.data[1].embedding[1] === 1, embeddedBatch.raw);
+
+seen.length = 0;
+script = [rateLimited()];
+const embedRateLimited = await req9("POST", "/v1/embeddings", { input: "x" }, vectorsToken);
+check("a 429 on the sole embeddings-capable key surfaces as rate_limited, not a hard failure",
+  embedRateLimited.status === 429 && embedRateLimited.body.error.code === "rate_limited", embedRateLimited.raw);
+
+const embedUnauth = await req9("POST", "/v1/embeddings", { input: "x" });
+check("embeddings needs a client token, not the admin one", embedUnauth.status === 401, embedUnauth.raw);
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

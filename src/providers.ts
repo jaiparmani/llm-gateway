@@ -17,6 +17,13 @@ export interface ProviderDef {
   keyShape: RegExp;
   /** Shown in the "does not look like a ... key" refusal. */
   keyHint: string;
+  /**
+   * Present only for a provider whose key can also call an embeddings
+   * endpoint (OpenAI-compatible: `{model, input}` in, `{data:[{embedding,
+   * index}]}` out). Most of the registry is chat-only, so `Gateway.embed`
+   * rotates across just the keys whose provider sets this.
+   */
+  embeddings?: { url: string; model: string };
 }
 
 export const DEFAULT_PROVIDER = "openrouter";
@@ -76,6 +83,9 @@ export const PROVIDERS: Record<string, ProviderDef> = {
     // weaker than the others, but there is nothing more specific to check.
     keyShape: /^[A-Za-z0-9]{32}$/,
     keyHint: "a 32-character key",
+    // The one provider here whose key also reaches an embeddings endpoint —
+    // see the field's own comment on ProviderDef.
+    embeddings: { url: "https://api.mistral.ai/v1/embeddings", model: "mistral-embed" },
   },
 };
 

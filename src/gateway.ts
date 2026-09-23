@@ -83,6 +83,17 @@ export interface Completion {
   keysTried: string[];
 }
 
+export interface EmbeddingResult {
+  /** One vector per input string, in the same order as the request. */
+  embeddings: number[][];
+  model: string;
+  inputTokens: number | null;
+  keyId: number;
+  keyMasked: string;
+  provider: string;
+  keysTried: string[];
+}
+
 export interface GatewayConfig {
   /** The OpenRouter default — kept under its old name for compatibility. */
   defaultModel: string;
@@ -90,6 +101,8 @@ export interface GatewayConfig {
   providerDefaultModels?: Partial<Record<string, string>>;
   /** Overrides every provider's upstream URL. Exists so tests can point at a stub. */
   upstreamUrl?: string;
+  /** Same, for the embeddings endpoint — see `upstreamUrl`. */
+  embeddingsUrl?: string;
   referer?: string;
   title?: string;
   timeoutMs?: number;
@@ -327,6 +340,116 @@ export class Gateway {
       lastHardFailure ??
       new GatewayError("Every configured key was rejected.")
     );
+  }
+
+  private async postEmbeddings(input: string[], key: ApiKeyRow, model: string): Promise<EmbeddingResult> {
+    const endpoint = providerOf(key.provider).embeddings;
+    if (!endpoint) {
+      // Should not happen — embed() only ever selects from keys whose
+      // provider has this — but a thrown GatewayError here still rotates to
+      // the next key exactly like any other hard failure would.
+      throw attributed(new GatewayError(`${providerOf(key.provider).label} has no embeddings endpoint.`), key);
+    }
+    const url = this.config.embeddingsUrl ?? endpoint.url;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: this.headers(key),
+        body: JSON.stringify({ model, input }),
+        signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
+      });
+    } catch (e) {
+      throw attributed(new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`), key);
+    }
+
+    if (response.status === 429) {
+      const { message, resetAt } = await rateLimitDetails(response);
+      throw attributed(new RateLimited(message, resetAt), key);
+    }
+    if (!response.ok) {
+      const message = `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
+      throw attributed(response.status === 400 ? new BadRequest(message) : new GatewayError(message), key);
+    }
+
+    const payload = (await response.json()) as {
+      data?: { embedding?: number[]; index?: number }[];
+      usage?: { prompt_tokens?: number; total_tokens?: number };
+      model?: string;
+    };
+    const rows = payload.data;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw attributed(new BadModelOutput(`${payload.model ?? model} returned no embeddings.`), key);
+    }
+
+    return {
+      embeddings: rows.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((r) => r.embedding ?? []),
+      model: payload.model ?? model,
+      inputTokens: payload.usage?.prompt_tokens ?? payload.usage?.total_tokens ?? null,
+      keyId: key.id,
+      keyMasked: key.masked,
+      provider: key.provider,
+      keysTried: [],
+    };
+  }
+
+  /**
+   * Embeddings for a batch of strings, rotating only across keys whose
+   * provider exposes an embeddings endpoint (see `ProviderDef.embeddings`) —
+   * most of the registry is chat-only. Mirrors `chat()`'s pause/bench and
+   * 429/hard-failure handling; there is no per-call model swap the way the
+   * free chat pool has, since an embeddings endpoint always serves the one
+   * model it was asked for.
+   */
+  async embed(input: string[], opts: { model?: string } = {}): Promise<EmbeddingResult> {
+    const allKeys = (await this.store.keys()).filter((k) => providerOf(k.provider).embeddings);
+    if (allKeys.length === 0) {
+      throw new NoKeysConfigured(
+        "No key is configured for a provider with an embeddings endpoint (e.g. Mistral). Add one at the admin page.",
+      );
+    }
+    const pausedProviders = await this.store.pausedProviders();
+    const usable = allKeys.filter((k) => !k.paused_at && !pausedProviders.has(k.provider));
+    if (usable.length === 0) {
+      throw new NoKeysConfigured(
+        "Every embeddings-capable key is paused, or belongs to a paused provider. Resume at least one from the console.",
+      );
+    }
+    const active = usable.filter((k) => !k.benched_at);
+    const keys = active.length > 0 ? active : usable;
+
+    const tried: string[] = [];
+    let lastRateLimit: RateLimited | null = null;
+    let lastHardFailure: GatewayError | null = null;
+
+    for (const key of keys) {
+      tried.push(key.masked);
+      try {
+        const model = opts.model ?? providerOf(key.provider).embeddings!.model;
+        const result = await this.postEmbeddings(input, key, model);
+        await this.store.pushToBack(key.id, false);
+        await this.store.clearFailures(key.id);
+        result.keysTried = tried;
+        return result;
+      } catch (e) {
+        if (e instanceof RateLimited) {
+          await this.store.pushToBack(key.id, true);
+          lastRateLimit = e;
+          continue;
+        }
+        if (e instanceof BadRequest) throw e;
+        if (e instanceof GatewayError) {
+          await this.store.pushToBack(key.id, false);
+          await this.store.recordFailure(key.id, e.message);
+          lastHardFailure = e;
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw lastRateLimit ?? lastHardFailure ?? new GatewayError("Every embeddings-capable key was rejected.");
   }
 
   /**

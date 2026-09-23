@@ -54,7 +54,10 @@ registry — OpenRouter, [Google Gemini](https://ai.google.dev/), [Groq](https:/
 upstream URL, a default model, and what a key for it looks like. All five speak the same
 shape (Bearer auth, `{model, messages}` in, OpenAI-style `{choices, usage, model}` out),
 which is what lets one rotation loop and one `post()` serve every one of them. Adding a
-sixth is a registry entry, not a new code path.
+sixth is a registry entry, not a new code path. Mistral doubles as the one provider here
+whose key also reaches an embeddings endpoint (`POST /v1/embeddings`) — an optional
+`embeddings: {url, model}` on a `ProviderDef`, with its own smaller rotation loop
+(`Gateway.embed`) over just the keys that have it.
 
 **Round-robin keys, across providers.** Take the key at the front of the queue, use it,
 push it to the back — it does not matter whose key is next, only that it is one. N keys
@@ -133,6 +136,7 @@ which key, and the token counts — visible at `/` and `/v1/usage`.
 |---|---|
 | `POST /v1/chat/completions` | **OpenAI-shaped.** An existing OpenRouter client moves here by changing one URL and one key. |
 | `POST /v1/json` | Salvages and validates server-side; returns a parsed object. |
+| `POST /v1/embeddings` | **OpenAI-shaped.** `{input: string \| string[], model?}` → `{data: [{embedding, index}]}`. Only reaches a key whose provider exposes an embeddings endpoint — see `ProviderDef.embeddings` in `src/providers.ts` (Mistral, currently the one provider here with one). `503 no_keys_configured` with none added. |
 | `GET /v1/keys` · `POST` · `DELETE /v1/keys/{id}` | The rotation queue. `POST` takes a `provider` field (see `GET /v1/providers`), defaulting to `openrouter`. Each key reports whether it is currently benched or paused, and why. Admin token. Masked values only. |
 | `POST /v1/keys/{id}/test` | Asks the provider about that one key, outside the rotation. Admin token. |
 | `POST /v1/keys/{id}/unbench` | Manually clears a key's benched state — the same effect a successful call has, for after you've fixed whatever was wrong upstream. Admin token. |

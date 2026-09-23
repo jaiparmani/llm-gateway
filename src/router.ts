@@ -46,6 +46,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         label: p.label,
         keyHint: p.keyHint,
         paused: paused.has(p.id),
+        embeddings: Boolean(p.embeddings),
       })),
     });
   }
@@ -123,6 +124,49 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           // Additive; a strict OpenAI client ignores it, and it is the only way
           // to see which key served a call.
           x_gateway: { key: completion.keyMasked, keys_tried: completion.keysTried },
+        });
+      } catch (e) {
+        if (e instanceof GatewayError) {
+          await record(deps, client, {
+            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+            inputTokens: null, outputTokens: null, ok: false, error: e.message,
+          });
+          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+        }
+        throw e;
+      }
+    }
+
+    // OpenAI-compatible embeddings — the one endpoint here that is not a chat
+    // completion. Only reaches a provider whose key supports it (see
+    // ProviderDef.embeddings); with none configured this 503s the same way
+    // chat does with no keys at all.
+    if (path === "/v1/embeddings" && method === "POST") {
+      const client = await deps.store.authenticate(bearer);
+      if (!client) {
+        return json({ error: { code: "unauthorized", message: "Send Authorization: Bearer <client token>." } }, 401);
+      }
+      const body = (await request.json()) as Record<string, any>;
+      const inputs = parseEmbeddingInput(body.input);
+      if (!inputs) {
+        return json(
+          { error: { code: "validation_failed", message: "`input` must be a non-empty string or array of non-empty strings." } },
+          400,
+        );
+      }
+
+      try {
+        const result = await deps.gateway.embed(inputs, { model: body.model });
+        await record(deps, client, {
+          model: result.model, keyMasked: result.keyMasked, keyId: result.keyId, provider: result.provider,
+          inputTokens: result.inputTokens, outputTokens: null, ok: true, error: null,
+        });
+        return json({
+          object: "list",
+          data: result.embeddings.map((embedding, index) => ({ object: "embedding", embedding, index })),
+          model: result.model,
+          usage: { prompt_tokens: result.inputTokens ?? 0, total_tokens: result.inputTokens ?? 0 },
+          x_gateway: { key: result.keyMasked, keys_tried: result.keysTried },
         });
       } catch (e) {
         if (e instanceof GatewayError) {
@@ -319,6 +363,14 @@ async function record(deps: RouterDeps, client: string, entry: {
   } catch {
     // Accounting must never be the reason an answer does not reach the caller.
   }
+}
+
+/** A single non-empty string, or an array of them — the two shapes OpenAI's embeddings API accepts. */
+function parseEmbeddingInput(raw: unknown): string[] | null {
+  const list = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : null;
+  if (!list || list.length === 0) return null;
+  if (!list.every((v): v is string => typeof v === "string" && v.length > 0)) return null;
+  return list;
 }
 
 function parseMessages(raw: unknown): Message[] | null {
