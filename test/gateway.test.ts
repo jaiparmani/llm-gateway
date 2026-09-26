@@ -226,6 +226,48 @@ const gaveUp = await req("POST", "/v1/json", { messages: [{ role: "user", conten
 check("giving up is a clear 502, not a crash",
   gaveUp.status === 502 && gaveUp.body.error.code === "bad_model_output", gaveUp.raw.slice(0, 200));
 
+console.log("\n── intent classification ──");
+
+const routeOptions = [
+  { id: "toolbox", description: "expenses, money, spending questions" },
+  { id: "brain-chat", description: "general conversation, reminders, memory" },
+  { id: "life-rpg", description: "quests, goals, habit tracking" },
+];
+
+const intentUnauth = await req("POST", "/v1/intent", { message: "20 chai", options: routeOptions });
+check("intent classification needs a client token, not the admin one", intentUnauth.status === 401, intentUnauth.raw);
+
+const badOptions = await req("POST", "/v1/intent", { message: "hi", options: [] }, brainToken);
+check("empty options is rejected", badOptions.status === 400 && badOptions.body.error.code === "validation_failed", badOptions.raw);
+
+const noMessage = await req("POST", "/v1/intent", { options: routeOptions }, brainToken);
+check("a missing message is rejected", noMessage.status === 400, noMessage.raw);
+
+script = [say('{"id":"toolbox","confidence":0.9}')];
+const routed = await req("POST", "/v1/intent", { message: "20 chai", options: routeOptions }, brainToken);
+check("a message is classified into one of the caller's own destinations",
+  routed.status === 200 && routed.body.id === "toolbox" && routed.body.confidence === 0.9, routed.raw);
+
+script = [say("Sure, I'd pick: {\"id\":\"brain-chat\"}")];
+const salvaged = await req("POST", "/v1/intent", { message: "remind me to call mom", options: routeOptions }, brainToken);
+check("a messy reply is salvaged the same way /v1/json does, with a default confidence",
+  salvaged.status === 200 && salvaged.body.id === "brain-chat" && salvaged.body.confidence === 0, salvaged.raw);
+
+script = [say('{"id":"not-a-real-destination"}')];
+const unknownNoFallback = await req("POST", "/v1/intent", { message: "???", options: routeOptions }, brainToken);
+check("an invented destination with no default is a clear 502",
+  unknownNoFallback.status === 502 && unknownNoFallback.body.error.code === "bad_model_output", unknownNoFallback.raw);
+
+script = [say('{"id":"not-a-real-destination"}')];
+const unknownWithFallback = await req(
+  "POST", "/v1/intent",
+  { message: "???", options: routeOptions, default: "brain-chat" },
+  brainToken,
+);
+check("an invented destination falls back to the caller's default when one is given",
+  unknownWithFallback.status === 200 && unknownWithFallback.body.id === "brain-chat" && unknownWithFallback.body.confidence === 0,
+  unknownWithFallback.raw);
+
 console.log("\n── auth and accounting ──");
 
 check("management needs the admin token, not a client token",

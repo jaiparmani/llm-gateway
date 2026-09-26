@@ -1,4 +1,5 @@
 import { Gateway, GatewayError, type Message } from "./gateway.ts";
+import { intentMessages, parseIntentOptions, resolveIntent } from "./intent.ts";
 import { isKnownProvider, PROVIDERS, providerOf } from "./providers.ts";
 import { mask, Store } from "./store.ts";
 import { ADMIN_HTML } from "./ui.generated.ts";
@@ -125,6 +126,46 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           // to see which key served a call.
           x_gateway: { key: completion.keyMasked, keys_tried: completion.keysTried },
         });
+      } catch (e) {
+        if (e instanceof GatewayError) {
+          await record(deps, client, {
+            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+            inputTokens: null, outputTokens: null, ok: false, error: e.message,
+          });
+          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+        }
+        throw e;
+      }
+    }
+
+    // ── intent classification ──────────────────────────────────────────────
+    // Which of the caller's own destinations a message belongs to. Reuses the
+    // same salvage/retry machinery as /v1/json; this repo has no idea what a
+    // destination *is*, only what the caller told it (see intent.ts).
+    if (path === "/v1/intent" && method === "POST") {
+      const client = await deps.store.authenticate(bearer);
+      if (!client) {
+        return json({ error: { code: "unauthorized", message: "Send Authorization: Bearer <client token>." } }, 401);
+      }
+      const body = (await request.json()) as Record<string, any>;
+      const message = typeof body.message === "string" ? body.message : "";
+      const options = parseIntentOptions(body.options);
+      const fallback = typeof body.default === "string" ? body.default : undefined;
+      if (!message || !options) {
+        return json(
+          { error: { code: "validation_failed", message: "`message` must be a non-empty string and `options` a non-empty array of {id, description}." } },
+          400,
+        );
+      }
+
+      try {
+        const { data, completion } = await deps.gateway.json(intentMessages(message, options), { expectKey: "id" });
+        const result = resolveIntent(data, options, fallback);
+        await record(deps, client, {
+          model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
+          inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+        });
+        return json(result);
       } catch (e) {
         if (e instanceof GatewayError) {
           await record(deps, client, {
