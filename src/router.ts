@@ -1,4 +1,5 @@
 import { Gateway, GatewayError, type Message } from "./gateway.ts";
+import { chatMessages, insightsMessages, parseHistory, parseInsightsResult } from "./insights.ts";
 import { intentMessages, parseIntentOptions, resolveIntent } from "./intent.ts";
 import { isKnownProvider, PROVIDERS, providerOf } from "./providers.ts";
 import { mask, Store } from "./store.ts";
@@ -52,9 +53,10 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     });
   }
 
-  // One file, two pages: the console and the chat. Both are the same document,
-  // which picks its tab from the path, so there is still only one asset to ship.
-  if ((path === "/" || path === "/chat") && method === "GET") {
+  // One file, three pages: the console, the chat, and insights. All the same
+  // document, which picks its tab from the path, so there is still only one
+  // asset to ship.
+  if ((path === "/" || path === "/chat" || path === "/insights") && method === "GET") {
     return new Response(ADMIN_HTML, {
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -225,6 +227,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     if (
       path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
       path === "/v1/usage" || path === "/v1/models" ||
+      path === "/v1/limits" || path.startsWith("/v1/insights") ||
       /^\/v1\/providers\/[^/]+\/(pause|resume)$/.test(path)
     ) {
       if (!deps.adminToken) {
@@ -380,6 +383,68 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       });
     }
 
+    // Observed limit signals only — see Gateway.limitsView for why nothing
+    // here is a guessed provider quota.
+    if (path === "/v1/limits" && method === "GET") {
+      return json(await deps.gateway.limitsView());
+    }
+
+    // The gateway reasoning about its own ledger — on demand only, so it
+    // never spends a rotation call the admin didn't ask for. Both routes
+    // below share the same snapshot; see insights.ts for the prompts.
+    if (path === "/v1/insights" && method === "POST") {
+      const context = await insightsContext(deps);
+      try {
+        const { data, completion } = await deps.gateway.json(insightsMessages(context), { expectKey: "headline" });
+        const result = parseInsightsResult(data);
+        await record(deps, "gateway:insights", {
+          model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
+          inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+        });
+        return json({ ...result, model: completion.model, key: completion.keyMasked, generatedAt: context.generatedAt });
+      } catch (e) {
+        if (e instanceof GatewayError) {
+          await record(deps, "gateway:insights", {
+            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+            inputTokens: null, outputTokens: null, ok: false, error: e.message,
+          });
+          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+        }
+        throw e;
+      }
+    }
+
+    if (path === "/v1/insights/chat" && method === "POST") {
+      const body = (await request.json()) as { question?: unknown; history?: unknown };
+      const question = typeof body.question === "string" ? body.question.trim() : "";
+      const history = parseHistory(body.history);
+      if (!question || !history) {
+        return json(
+          { error: { code: "validation_failed", message: "`question` must be a non-empty string; `history`, if given, an array of {role: \"user\"|\"assistant\", content}." } },
+          400,
+        );
+      }
+
+      const context = await insightsContext(deps);
+      try {
+        const completion = await deps.gateway.chat(chatMessages(context, question, history));
+        await record(deps, "gateway:chat-insights", {
+          model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
+          inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+        });
+        return json({ answer: completion.content, model: completion.model, key: completion.keyMasked });
+      } catch (e) {
+        if (e instanceof GatewayError) {
+          await record(deps, "gateway:chat-insights", {
+            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+            inputTokens: null, outputTokens: null, ok: false, error: e.message,
+          });
+          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+        }
+        throw e;
+      }
+    }
+
     return json({ error: { code: "not_found", message: `No route for ${method} ${path}.` } }, 404);
   } catch (e) {
     if (e instanceof SyntaxError) {
@@ -404,6 +469,43 @@ async function record(deps: RouterDeps, client: string, entry: {
   } catch {
     // Accounting must never be the reason an answer does not reach the caller.
   }
+}
+
+/**
+ * The JSON snapshot both /v1/insights and /v1/insights/chat ground their
+ * reply in — usage totals, observed limit signals, clients, and the most
+ * recent failures. Everything in it already passed through Store's own
+ * masking/redaction on the way in, so there is nothing here an admin
+ * couldn't already see on the Console and Limits & health cards.
+ */
+async function insightsContext(deps: RouterDeps) {
+  const [summary, limits, recent, clients] = await Promise.all([
+    deps.store.summary(),
+    deps.gateway.limitsView(),
+    deps.store.usage(25),
+    deps.store.clients(),
+  ]);
+  const recentFailures = (recent as Record<string, unknown>[])
+    .filter((r) => !r.ok)
+    .slice(0, 10)
+    .map((r) => ({
+      at: r.at, client: r.client, provider: r.provider,
+      error: typeof r.error === "string" ? r.error.slice(0, 200) : r.error,
+    }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    usage: {
+      calls: Number(summary.calls ?? 0),
+      ok: Number(summary.ok ?? 0),
+      inputTokens: Number(summary.input_tokens ?? 0),
+      outputTokens: Number(summary.output_tokens ?? 0),
+      byProvider: summary.byProvider,
+    },
+    limits,
+    clients,
+    recentFailures,
+  };
 }
 
 /** A single non-empty string, or an array of them — the two shapes OpenAI's embeddings API accepts. */

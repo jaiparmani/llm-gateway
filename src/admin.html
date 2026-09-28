@@ -78,6 +78,7 @@
   <nav class="nav">
     <button data-view="console">Console</button>
     <button data-view="chat">Chat</button>
+    <button data-view="insights">Insights</button>
   </nav>
 
   <!-- ── console ─────────────────────────────────────────────────────────── -->
@@ -210,6 +211,60 @@
       </div>
     </div>
   </div>
+
+  <!-- ── insights ────────────────────────────────────────────────────────── -->
+  <div id="view-insights" hidden>
+    <div id="insightsLocked" hidden>
+      <div class="card">
+        <p class="muted" style="margin:0 0 13px">
+          Insights reads the same operational data as the Console tab — unlock with the admin
+          token there first.
+        </p>
+        <button class="btn primary" id="goUnlock">Go to Console</button>
+      </div>
+    </div>
+
+    <div id="insightsApp" hidden>
+      <div class="card">
+        <p class="eyebrow">Limits &amp; health</p>
+        <p class="muted" style="margin:0 0 13px">
+          What's actually been observed in the last 24 hours. Providers don't reliably expose
+          what their free tier allows, so nothing below is a guessed cap — only calls made and
+          429s actually received.
+        </p>
+        <div class="grid" id="limitsSummary"></div>
+        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <div style="overflow-x:auto"><table id="limitsByProvider"></table></div>
+        <p class="dim" style="margin:16px 0 6px">By key</p>
+        <div style="overflow-x:auto"><table id="limitsByKey"></table></div>
+      </div>
+
+      <div class="card">
+        <p class="eyebrow">AI insights</p>
+        <p class="muted" style="margin:0 0 13px">
+          Spends one call from the rotation to read the data above and point out what's worth
+          noticing — only on request, never on its own.
+        </p>
+        <button class="btn primary" id="genInsights">Analyze usage</button>
+        <div id="insightsOut" style="margin-top:14px"></div>
+      </div>
+
+      <div class="card">
+        <p class="eyebrow">Ask about your data</p>
+        <p class="muted" style="margin:0 0 13px">
+          Answers grounded only in the snapshot above — it says so rather than guessing at
+          anything not in it.
+        </p>
+        <div id="dataChatLog"></div>
+        <div class="row" style="margin-top:10px">
+          <input id="dataChatInput" class="inp grow" autocomplete="off"
+                 placeholder="e.g. which provider failed the most today?">
+          <button class="btn primary" id="dataChatSend">Ask</button>
+        </div>
+        <div class="dim" id="dataChatStatus" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -287,22 +342,28 @@
   // ── which page ────────────────────────────────────────────────────────────
   let view = "console";
   function show(next, push) {
-    view = next === "chat" ? "chat" : "console";
+    view = next === "chat" ? "chat" : next === "insights" ? "insights" : "console";
     $("#view-console").hidden = view !== "console";
     $("#view-chat").hidden = view !== "chat";
+    $("#view-insights").hidden = view !== "insights";
     document.querySelectorAll("[data-view]").forEach((b) => {
       if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
     });
-    if (push) history.pushState({}, "", view === "chat" ? "/chat" : "/");
+    if (push) history.pushState({}, "", view === "chat" ? "/chat" : view === "insights" ? "/insights" : "/");
     if (view === "chat") drawChat();
+    if (view === "insights") drawInsights();
   }
   document.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => show(b.dataset.view, true)));
-  window.onpopstate = () => show(location.pathname.replace(/\/+$/, "") === "/chat" ? "chat" : "console", false);
+  window.onpopstate = () => {
+    const p = location.pathname.replace(/\/+$/, "");
+    show(p === "/chat" ? "chat" : p === "/insights" ? "insights" : "console", false);
+  };
 
   // ── console ───────────────────────────────────────────────────────────────
   function lock() {
     token = ""; localStorage.removeItem("gw.token");
     $("#app").hidden = true; $("#gate").hidden = false; $("#lock").hidden = true;
+    $("#insightsApp").hidden = true; $("#insightsLocked").hidden = false;
   }
   async function unlock(candidate) {
     token = (candidate || "").trim(); if (!token) return;
@@ -590,6 +651,97 @@
   $("#newChat").onclick = () => { turns = []; drawChat(); };
   $("#send").onclick = send;
   $("#composer").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+
+  // ── insights ──────────────────────────────────────────────────────────────
+  // Admin-only data, so this reuses the same token/api() the Console tab
+  // already unlocked — no separate client-token flow the way Chat needs.
+  let insightTurns = [];
+
+  async function drawInsights() {
+    $("#insightsLocked").hidden = !!token;
+    $("#insightsApp").hidden = !token;
+    if (!token) return;
+    try { await loadLimits(); } catch (e) { if (e.message !== "unauthorized") alert(e.message); }
+  }
+  $("#goUnlock").onclick = () => show("console", true);
+
+  async function loadLimits() {
+    const L = await api("/v1/limits");
+    const calls24h = L.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
+    const rateLimited = L.keys.filter((k) => k.rateLimitedRecently).length;
+    const benched = L.keys.filter((k) => k.benched).length;
+    const paused = L.keys.filter((k) => k.paused || k.providerPaused).length;
+    $("#limitsSummary").innerHTML = `
+      <div><div class="k">Keys</div><div class="v">${L.keys.length}</div></div>
+      <div><div class="k">Calls, 24h</div><div class="v">${calls24h}</div></div>
+      <div><div class="k">Rate limited, 24h</div><div class="v ${rateLimited ? "warn" : ""}">${rateLimited}</div></div>
+      <div><div class="k">Benched</div><div class="v ${benched ? "bad" : ""}">${benched}</div></div>
+      <div><div class="k">Paused</div><div class="v ${paused ? "warn" : ""}">${paused}</div></div>`;
+
+    $("#limitsByProvider").innerHTML = L.byProvider.length
+      ? `<tr><th>Provider</th><th>Keys</th><th>Calls, 24h</th><th>Rate limited</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `
+        <tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td>
+        <td class="num ${p.rateLimitedRecently ? "warn" : ""}">${p.rateLimitedRecently}</td>
+        <td class="num ${p.benched ? "bad" : ""}">${p.benched}</td><td class="num ${p.paused ? "warn" : ""}">${p.paused}</td></tr>`).join("")
+      : `<tr><td class="dim">No keys configured.</td></tr>`;
+
+    $("#limitsByKey").innerHTML = L.keys.length
+      ? `<tr><th>Key</th><th>Provider</th><th>Calls, 24h</th><th>Status</th></tr>` + L.keys.map((k) => `
+        <tr><td>${esc(k.masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.callsLast24h}</td>
+        <td>${
+          k.benched ? '<span class="bad">benched</span>'
+          : (k.paused || k.providerPaused) ? '<span class="warn">paused</span>'
+          : k.rateLimitedRecently ? '<span class="warn">rate limited</span>'
+          : '<span class="ok">active</span>'
+        }</td></tr>`).join("")
+      : `<tr><td class="dim">No keys yet.</td></tr>`;
+  }
+
+  $("#genInsights").onclick = async () => {
+    const btn = $("#genInsights");
+    btn.disabled = true;
+    $("#insightsOut").innerHTML = `<p class="dim" style="margin:0">Reading the data…</p>`;
+    try {
+      const r = await api("/v1/insights", { method: "POST" });
+      $("#insightsOut").innerHTML = `
+        <p style="margin:0 0 10px;font-weight:600">${esc(r.headline)}</p>
+        <ul style="margin:0;padding-left:18px">${r.bullets.map((b) => `<li style="margin-top:5px">${esc(b)}</li>`).join("")}</ul>
+        <p class="dim" style="margin-top:12px">via ${esc(r.model)} &middot; key ${esc(r.key)}</p>`;
+    } catch (e) {
+      $("#insightsOut").innerHTML = `<span class="bad" style="font-size:13px">${esc(e.message)}</span>`;
+    }
+    btn.disabled = false;
+  };
+
+  function drawDataChat() {
+    $("#dataChatLog").innerHTML = insightTurns.map((t) => `
+      <div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}">
+        <div class="who">${t.role === "user" ? "You" : "Gateway"}</div>
+        <div class="bubble">${esc(t.content)}</div>
+      </div>`).join("");
+    $("#dataChatLog").scrollIntoView({ block: "end" });
+  }
+
+  async function sendDataChat() {
+    const text = $("#dataChatInput").value.trim(); if (!text) return;
+    insightTurns.push({ role: "user", content: text });
+    $("#dataChatInput").value = "";
+    drawDataChat();
+    $("#dataChatSend").disabled = true;
+    $("#dataChatStatus").textContent = "Thinking…";
+    try {
+      const history = insightTurns.slice(0, -1).filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content }));
+      const r = await api("/v1/insights/chat", { method: "POST", body: JSON.stringify({ question: text, history }) });
+      insightTurns.push({ role: "assistant", content: r.answer });
+    } catch (e) {
+      insightTurns.push({ role: "assistant", trouble: true, content: e.message });
+    }
+    $("#dataChatSend").disabled = false;
+    $("#dataChatStatus").textContent = "";
+    drawDataChat();
+  }
+  $("#dataChatSend").onclick = sendDataChat;
+  $("#dataChatInput").onkeydown = (e) => { if (e.key === "Enter") sendDataChat(); };
 
   // ── start ─────────────────────────────────────────────────────────────────
   show(location.pathname.replace(/\/+$/, "") === "/chat" ? "chat" : "console", false);

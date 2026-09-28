@@ -582,6 +582,61 @@ export class Gateway {
   }
 
   /**
+   * Observed limit signals, per key and per provider — never a guessed quota.
+   * Providers don't reliably expose what their free tier actually allows, so
+   * this only ever reports what already happened: calls in the last 24h and
+   * whether a key was rate-limited inside that same window. For the admin
+   * console's "Limits & health" card.
+   */
+  async limitsView(): Promise<{
+    keys: {
+      id: number; masked: string; label: string; provider: string;
+      benched: boolean; paused: boolean; providerPaused: boolean;
+      lastRateLimitedAt: string | null; rateLimitedRecently: boolean; callsLast24h: number;
+    }[];
+    byProvider: {
+      provider: string; label: string; keys: number; callsLast24h: number;
+      rateLimitedRecently: number; benched: number; paused: number;
+    }[];
+  }> {
+    const keys = await this.store.publicKeys();
+    const pausedProviders = await this.store.pausedProviders();
+    const window = await this.store.usageWindow(24);
+    const cutoff = Date.now() - 24 * 3_600_000;
+
+    const rows = keys.map((k) => ({
+      id: k.id,
+      masked: k.masked,
+      label: k.label,
+      provider: k.provider,
+      benched: k.benched,
+      paused: k.paused,
+      providerPaused: pausedProviders.has(k.provider),
+      lastRateLimitedAt: k.lastRateLimitedAt,
+      rateLimitedRecently: k.lastRateLimitedAt !== null && Date.parse(k.lastRateLimitedAt) >= cutoff,
+      callsLast24h: window.byKey[k.id] ?? 0,
+    }));
+
+    const byProviderId = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const list = byProviderId.get(row.provider) ?? [];
+      list.push(row);
+      byProviderId.set(row.provider, list);
+    }
+    const byProvider = [...byProviderId.entries()].map(([id, providerRows]) => ({
+      provider: id,
+      label: providerOf(id).label,
+      keys: providerRows.length,
+      callsLast24h: providerRows.reduce((sum, r) => sum + r.callsLast24h, 0),
+      rateLimitedRecently: providerRows.filter((r) => r.rateLimitedRecently).length,
+      benched: providerRows.filter((r) => r.benched).length,
+      paused: providerRows.filter((r) => r.paused || r.providerPaused).length,
+    }));
+
+    return { keys: rows, byProvider };
+  }
+
+  /**
    * Every provider's model, and where it comes from — for the admin console's
    * "default models" card. `effective` is exactly what `modelFor` would pick.
    */

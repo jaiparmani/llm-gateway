@@ -813,6 +813,68 @@ check("a 429 on the sole embeddings-capable key surfaces as rate_limited, not a 
 const embedUnauth = await req9("POST", "/v1/embeddings", { input: "x" });
 check("embeddings needs a client token, not the admin one", embedUnauth.status === 401, embedUnauth.raw);
 
+console.log("\n── insights: observed limits, the AI narrative, and the data chatbot ──");
+
+const dbI = makeD1(schema);
+const storeI = new Store(dbI);
+const gatewayI = new Gateway(storeI, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsI = { store: storeI, gateway: gatewayI, adminToken: "admin-t0ken" };
+const reqI = reqFor(depsI);
+
+const limitsUnauth = await reqI("GET", "/v1/limits", undefined, "");
+check("GET /v1/limits needs the admin token, not none at all", limitsUnauth.status === 401, limitsUnauth.raw);
+
+await reqI("POST", "/v1/keys", { keys: keyOf("i") });
+const issuedI = await reqI("POST", "/v1/clients", { name: "insights-client" });
+const insightsClientToken = issuedI.body.token as string;
+
+seen.length = 0;
+script = [rateLimited()];
+await reqI("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, insightsClientToken);
+seen.length = 0;
+script = [say("a normal reply")];
+await reqI("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi again" }] }, insightsClientToken);
+
+const limits = await reqI("GET", "/v1/limits");
+check("limitsView reports the calls actually observed in the last 24h",
+  limits.status === 200 && limits.body.keys[0].callsLast24h === 2, limits.body);
+check("limitsView flags the key as rate-limited recently after the scripted 429",
+  limits.body.keys[0].rateLimitedRecently === true, limits.body);
+
+seen.length = 0;
+script = [say('{"headline":"One key, one 429 today.","bullets":["1 key is configured and answered 2 calls in the last 24h.","It was rate limited once and recovered on the next call."]}')];
+const insights = await reqI("POST", "/v1/insights");
+check("POST /v1/insights returns a parsed headline and bullets",
+  insights.status === 200 && typeof insights.body.headline === "string" && insights.body.bullets.length === 2, insights.raw);
+check("the insights call is recorded under a gateway-internal client, not a real one",
+  (await storeI.usage(5)).some((u: any) => u.client === "gateway:insights"), await storeI.usage(5));
+
+const insightsUnauth = await reqI("POST", "/v1/insights", undefined, "");
+check("POST /v1/insights needs the admin token", insightsUnauth.status === 401, insightsUnauth.raw);
+
+seen.length = 0;
+script = [say("not JSON at all, and there is no closing brace either")];
+const badInsights = await reqI("POST", "/v1/insights");
+check("a malformed insights reply is a clean error, not a crash",
+  badInsights.status !== 200 && badInsights.body?.error?.code === "bad_model_output", badInsights.raw);
+
+seen.length = 0;
+script = [say("The free pool answered every call today; nothing else stands out.")];
+const chatAnswer = await reqI("POST", "/v1/insights/chat", { question: "any problems today?" });
+check("POST /v1/insights/chat answers grounded in the snapshot",
+  chatAnswer.status === 200 && typeof chatAnswer.body.answer === "string" && chatAnswer.body.answer.length > 0, chatAnswer.raw);
+
+const badHistory = await reqI("POST", "/v1/insights/chat", { question: "x", history: [{ role: "system", content: "nope" }] });
+check("insights chat rejects a history entry with a disallowed role",
+  badHistory.status === 400 && badHistory.body.error.code === "validation_failed", badHistory.raw);
+
+const emptyQuestion = await reqI("POST", "/v1/insights/chat", { question: "" });
+check("insights chat rejects an empty question",
+  emptyQuestion.status === 400 && emptyQuestion.body.error.code === "validation_failed", emptyQuestion.raw);
+
+const chatUnauth = await reqI("POST", "/v1/insights/chat", { question: "x" }, "");
+check("POST /v1/insights/chat needs the admin token", chatUnauth.status === 401, chatUnauth.raw);
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

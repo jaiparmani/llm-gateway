@@ -355,6 +355,25 @@ export class Store {
     return (results ?? []) as Record<string, unknown>[];
   }
 
+  /** Calls in the trailing `hours` window, grouped by key and by provider — the raw material for "how close to a limit" without ever guessing what that limit is. */
+  async usageWindow(hours: number): Promise<{ byKey: Record<number, number>; byProvider: Record<string, number> }> {
+    const since = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const { results } = await this.db
+      .prepare(
+        `SELECT key_id, provider, COUNT(*) AS calls
+           FROM usage WHERE at >= ? AND key_id IS NOT NULL GROUP BY key_id, provider`,
+      )
+      .bind(since)
+      .all<{ key_id: number; provider: string; calls: number }>();
+    const byKey: Record<number, number> = {};
+    const byProvider: Record<string, number> = {};
+    for (const row of results ?? []) {
+      byKey[row.key_id] = (byKey[row.key_id] ?? 0) + row.calls;
+      byProvider[row.provider] = (byProvider[row.provider] ?? 0) + row.calls;
+    }
+    return { byKey, byProvider };
+  }
+
   async summary(): Promise<Record<string, unknown>> {
     const totals = await this.db
       .prepare(
