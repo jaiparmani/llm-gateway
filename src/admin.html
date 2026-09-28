@@ -613,9 +613,12 @@
     drawChat();
     setBusy(true);
 
-    const body = { messages: conversation() };
+    const body = { messages: conversation(), stream: true };
     const model = $("#model").value.trim();
     if (model) body.model = model;
+
+    const turn = { role: "assistant", content: "" };
+    let started = false;
 
     try {
       const res = await fetch("/v1/chat/completions", {
@@ -623,26 +626,57 @@
         headers: { Authorization: "Bearer " + clientToken, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const text2 = await res.text();
-      let payload = null;
-      try { payload = text2 ? JSON.parse(text2) : null; } catch { /* a proxy in the way, not the gateway */ }
-      if (!res.ok || !payload) {
+
+      if (!res.ok || !res.body) {
+        const text2 = await res.text();
+        let payload = null;
+        try { payload = text2 ? JSON.parse(text2) : null; } catch { /* a proxy in the way, not the gateway */ }
         turns.push({ role: "assistant", trouble: true, content: explain(res.status, payload) });
-        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "That client token was rejected."; return; }
+        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "That client token was rejected."; drawChat(); return; }
       } else {
-        turns.push({
-          role: "assistant",
-          content: payload.choices?.[0]?.message?.content ?? "",
-          model: payload.model,
-          key: payload.x_gateway?.key,
-          tried: payload.x_gateway?.keys_tried?.length ?? 1,
-        });
+        turns.push(turn);
+        started = true;
+        drawChat();
+        // drawChat() just rebuilt #log from `turns`, so this is that turn's own bubble —
+        // updated directly per token rather than re-rendering the whole log every time.
+        const bubble = $("#log").lastElementChild?.querySelector(".bubble");
+
+        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += value;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            let json;
+            try { json = JSON.parse(payload); } catch { continue; }
+            if (json.x_gateway) { turn.model = json.model; turn.key = json.x_gateway.key; turn.tried = json.x_gateway.keys_tried?.length ?? 1; }
+            const delta = json.choices?.[0]?.delta?.content;
+            if (delta) {
+              turn.content += delta;
+              if (bubble) { bubble.textContent = turn.content; $("#log").scrollIntoView({ block: "end" }); }
+            }
+          }
+        }
+
+        if (!turn.content) {
+          turn.trouble = true;
+          turn.content = explain(502, { error: { code: "bad_model_output" } });
+        }
+        drawChat();
       }
     } catch (e) {
-      turns.push({ role: "assistant", trouble: true, content: "The gateway could not be reached: " + e.message });
+      if (started) { turn.trouble = true; turn.content += (turn.content ? "\n\n" : "") + "[connection lost: " + e.message + "]"; }
+      else turns.push({ role: "assistant", trouble: true, content: "The gateway could not be reached: " + e.message });
+      drawChat();
     }
     setBusy(false);
-    drawChat();
   }
 
   $("#chatUnlock").onclick = () => { $("#chatGateErr").textContent = ""; setClientToken($("#clientTok").value); };

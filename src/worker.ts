@@ -19,7 +19,7 @@ export interface Env {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (!env.DB) {
       return new Response(
         JSON.stringify({ error: { code: "misconfigured", message: "No D1 binding. Run: npm run db:init" } }, null, 2),
@@ -43,6 +43,6 @@ export default {
       title: "llm-gateway",
     });
 
-    return handle(request, { store, gateway, adminToken: env.ADMIN_TOKEN ?? "" });
+    return handle(request, { store, gateway, adminToken: env.ADMIN_TOKEN ?? "", waitUntil: ctx.waitUntil.bind(ctx) });
   },
 };

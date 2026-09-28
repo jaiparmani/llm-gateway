@@ -22,6 +22,13 @@ export interface RouterDeps {
   gateway: Gateway;
   /** Gates the admin UI and every key/client endpoint. */
   adminToken: string;
+  /**
+   * Lets a Response go out before work that started it has finished — needed
+   * for a streamed completion, whose usage-ledger write only becomes
+   * possible once the stream itself ends, well after the client already has
+   * the Response. Passed straight through from the Worker's own `ctx.waitUntil`.
+   */
+  waitUntil: (promise: Promise<unknown>) => void;
 }
 
 export async function handle(request: Request, deps: RouterDeps): Promise<Response> {
@@ -101,6 +108,33 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
             attempts: completion.attempts,
             usage: { input_tokens: completion.inputTokens, output_tokens: completion.outputTokens },
             x_gateway: { key: completion.keyMasked },
+          });
+        }
+
+        // Streaming only ever applies to /v1/chat/completions — /v1/json needs
+        // the complete text to run its salvage/retry, so it can't stream.
+        if (body.stream === true) {
+          const streamResult = await deps.gateway.chatStream(messages, {
+            model: body.model,
+            maxTokens: body.max_tokens,
+            jsonObject: body.response_format?.type === "json_object",
+          });
+          // The usage-ledger write only becomes possible once the stream
+          // itself ends — long after this Response has already gone out —
+          // so it rides on waitUntil rather than being awaited here.
+          deps.waitUntil(streamResult.outcome.then((o) =>
+            record(deps, client, {
+              model: o.model, keyMasked: streamResult.keyMasked, keyId: streamResult.keyId, provider: streamResult.provider,
+              inputTokens: o.inputTokens, outputTokens: o.outputTokens, ok: o.ok, error: o.error,
+            }),
+          ));
+          return new Response(streamResult.body, {
+            headers: {
+              ...CORS,
+              "content-type": "text/event-stream; charset=utf-8",
+              "cache-control": "no-cache",
+              "connection": "keep-alive",
+            },
           });
         }
 

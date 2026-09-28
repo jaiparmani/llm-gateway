@@ -12,8 +12,25 @@ function check(label: string, ok: boolean, detail: unknown = "") {
   if (!ok) failures++;
 }
 
+/**
+ * Adds the `waitUntil` RouterDeps now requires — a streamed call's
+ * usage-ledger write only happens once its stream ends, after `handle()`
+ * has already returned, so tests that check ledger effects on a streamed
+ * call must `await deps.drain()` first to let that trailing write land.
+ */
+function withWaitUntil<T extends { store: Store; gateway: Gateway; adminToken: string }>(deps: T) {
+  const pending: Promise<unknown>[] = [];
+  return {
+    ...deps,
+    waitUntil: (p: Promise<unknown>) => { pending.push(p); },
+    drain: () => Promise.all(pending).then(() => {}),
+  };
+}
+
 // ── a stub OpenRouter ───────────────────────────────────────────────────────
-let script: { status: number; body: unknown }[] = [];
+// A scripted reply is either a normal JSON body, or `raw: true` with `body`
+// as a preformatted SSE text payload — for exercising streaming.
+let script: { status: number; body: unknown; raw?: boolean }[] = [];
 const seen: { auth: string; body: any }[] = [];
 
 const stub = createServer(async (req, res) => {
@@ -21,10 +38,16 @@ const stub = createServer(async (req, res) => {
   for await (const c of req) chunks.push(c as Buffer);
   seen.push({ auth: req.headers.authorization ?? "", body: JSON.parse(Buffer.concat(chunks).toString()) });
   const next = script.shift() ?? { status: 200, body: { choices: [{ message: { content: "{}" } }] } };
+  const key = seen.at(-1)!.auth.replace("Bearer ", "");
+  if (next.raw) {
+    res.writeHead(next.status, { "content-type": "text/event-stream" });
+    res.end(String(next.body).split("__KEY__").join(key));
+    return;
+  }
   res.writeHead(next.status, { "content-type": "application/json" });
   // __KEY__ stands for whichever key this call actually carried, so a scripted
   // reply can echo the credential back the way a real provider might.
-  res.end(JSON.stringify(next.body).split("__KEY__").join(seen.at(-1)!.auth.replace("Bearer ", "")));
+  res.end(JSON.stringify(next.body).split("__KEY__").join(key));
 });
 await new Promise<void>((r) => stub.listen(0, r));
 const upstreamUrl = `http://127.0.0.1:${(stub.address() as { port: number }).port}/v1/chat/completions`;
@@ -43,6 +66,19 @@ const serverError = () => ({
   status: 500,
   body: { error: { message: "internal error at __KEY__" } },
 });
+/**
+ * A scripted SSE reply: one chunk per content piece, then a trailing
+ * usage-only chunk (the OpenAI-compatible shape `stream_options.include_usage`
+ * asks for — empty `choices`, `usage` alongside it) and `[DONE]`.
+ */
+const sse = (contents: string[], usage = { prompt_tokens: 5, completion_tokens: 9 }, model = "stub/model-a") => {
+  const lines = contents.map((content, i) =>
+    `data: ${JSON.stringify({ model, choices: [{ index: 0, delta: { content }, finish_reason: i === contents.length - 1 ? "stop" : null }] })}\n\n`,
+  );
+  lines.push(`data: ${JSON.stringify({ model, choices: [], usage })}\n\n`);
+  lines.push("data: [DONE]\n\n");
+  return { status: 200, body: lines.join(""), raw: true };
+};
 const keyOf = (n: string) => "sk-or-v1-" + (n.repeat(64)).slice(0, 64);
 const keysUsed = () => seen.map((s) => s.auth.replace("Bearer ", ""));
 
@@ -51,7 +87,7 @@ const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
 const db = makeD1(schema);
 const store = new Store(db);
 const gateway = new Gateway(store, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps = { store, gateway, adminToken: "admin-t0ken" };
+const deps = withWaitUntil({ store, gateway, adminToken: "admin-t0ken" });
 
 async function req(method: string, path: string, body?: unknown, token = "admin-t0ken") {
   const res = await handle(
@@ -388,7 +424,7 @@ const gateway2 = new Gateway(store2, {
   timeoutMs: 5000,
   providerDefaultModels: { gemini: "stub/gemini-model" },
 });
-const deps2 = { store: store2, gateway: gateway2, adminToken: "admin-t0ken" };
+const deps2 = withWaitUntil({ store: store2, gateway: gateway2, adminToken: "admin-t0ken" });
 async function req2(method: string, path: string, body?: unknown, token = "admin-t0ken") {
   const res = await handle(
     new Request(`http://x${path}`, {
@@ -468,7 +504,7 @@ check("a newer AQ.-prefixed Gemini key is also accepted, not just the legacy AIz
 // A separate store/gateway per scenario below, same reason as db2: each test
 // needs to drive a key's failure count to an exact place, which a shared
 // queue full of unrelated activity would make fragile to assert on.
-function reqFor(deps: { store: Store; gateway: Gateway; adminToken: string }) {
+function reqFor(deps: { store: Store; gateway: Gateway; adminToken: string; waitUntil: (p: Promise<unknown>) => void }) {
   return async (method: string, path: string, body?: unknown, token = "admin-t0ken") => {
     const res = await handle(
       new Request(`http://x${path}`, {
@@ -488,7 +524,7 @@ console.log("\n── key health: rotating past a hard failure, and benching one
 const db3 = makeD1(schema);
 const store3 = new Store(db3);
 const gateway3 = new Gateway(store3, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps3 = { store: store3, gateway: gateway3, adminToken: "admin-t0ken" };
+const deps3 = withWaitUntil({ store: store3, gateway: gateway3, adminToken: "admin-t0ken" });
 const req3 = reqFor(deps3);
 
 await req3("POST", "/v1/keys", { keys: `${keyOf("m")}\n${keyOf("n")}` });
@@ -553,7 +589,7 @@ console.log("\n── key health: a success resets the counter, and the queue ne
 const db4 = makeD1(schema);
 const store4 = new Store(db4);
 const gateway4 = new Gateway(store4, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps4 = { store: store4, gateway: gateway4, adminToken: "admin-t0ken" };
+const deps4 = withWaitUntil({ store: store4, gateway: gateway4, adminToken: "admin-t0ken" });
 const req4 = reqFor(deps4);
 
 await req4("POST", "/v1/keys", { keys: keyOf("p") });
@@ -605,7 +641,7 @@ console.log("\n── key health: a rate limit never counts toward benching ─�
 const db5 = makeD1(schema);
 const store5 = new Store(db5);
 const gateway5 = new Gateway(store5, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps5 = { store: store5, gateway: gateway5, adminToken: "admin-t0ken" };
+const deps5 = withWaitUntil({ store: store5, gateway: gateway5, adminToken: "admin-t0ken" });
 const req5 = reqFor(deps5);
 
 await req5("POST", "/v1/keys", { keys: keyOf("q") });
@@ -625,7 +661,7 @@ console.log("\n── pausing a key manually, distinct from benching ──");
 const db6 = makeD1(schema);
 const store6 = new Store(db6);
 const gateway6 = new Gateway(store6, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps6 = { store: store6, gateway: gateway6, adminToken: "admin-t0ken" };
+const deps6 = withWaitUntil({ store: store6, gateway: gateway6, adminToken: "admin-t0ken" });
 const req6 = reqFor(deps6);
 
 const addedA = await req6("POST", "/v1/keys", { keys: keyOf("m") });
@@ -684,7 +720,7 @@ console.log("\n── pausing a whole provider ──");
 const db7 = makeD1(schema);
 const store7 = new Store(db7);
 const gateway7 = new Gateway(store7, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps7 = { store: store7, gateway: gateway7, adminToken: "admin-t0ken" };
+const deps7 = withWaitUntil({ store: store7, gateway: gateway7, adminToken: "admin-t0ken" });
 const req7 = reqFor(deps7);
 
 await req7("POST", "/v1/keys", { keys: `${keyOf("p")}\n${keyOf("q")}` });
@@ -725,7 +761,7 @@ console.log("\n── per-provider and per-key analytics ──");
 const db8 = makeD1(schema);
 const store8 = new Store(db8);
 const gateway8 = new Gateway(store8, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const deps8 = { store: store8, gateway: gateway8, adminToken: "admin-t0ken" };
+const deps8 = withWaitUntil({ store: store8, gateway: gateway8, adminToken: "admin-t0ken" });
 const req8 = reqFor(deps8);
 
 const addedR = await req8("POST", "/v1/keys", { keys: keyOf("r") });
@@ -769,7 +805,7 @@ const vectors = (...values: number[][]) => ({
 const db9 = makeD1(schema);
 const store9 = new Store(db9);
 const gateway9 = new Gateway(store9, { defaultModel: "stub/default", upstreamUrl, embeddingsUrl, timeoutMs: 5000 });
-const deps9 = { store: store9, gateway: gateway9, adminToken: "admin-t0ken" };
+const deps9 = withWaitUntil({ store: store9, gateway: gateway9, adminToken: "admin-t0ken" });
 const req9 = reqFor(deps9);
 
 const issued9 = await req9("POST", "/v1/clients", { name: "vectors" });
@@ -818,7 +854,7 @@ console.log("\n── insights: observed limits, the AI narrative, and the data 
 const dbI = makeD1(schema);
 const storeI = new Store(dbI);
 const gatewayI = new Gateway(storeI, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
-const depsI = { store: storeI, gateway: gatewayI, adminToken: "admin-t0ken" };
+const depsI = withWaitUntil({ store: storeI, gateway: gatewayI, adminToken: "admin-t0ken" });
 const reqI = reqFor(depsI);
 
 const limitsUnauth = await reqI("GET", "/v1/limits", undefined, "");
@@ -874,6 +910,74 @@ check("insights chat rejects an empty question",
 
 const chatUnauth = await reqI("POST", "/v1/insights/chat", { question: "x" }, "");
 check("POST /v1/insights/chat needs the admin token", chatUnauth.status === 401, chatUnauth.raw);
+
+console.log("\n── streaming: /v1/chat/completions with stream:true ──");
+
+const dbS = makeD1(schema);
+const storeS = new Store(dbS);
+const gatewayS = new Gateway(storeS, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsS = withWaitUntil({ store: storeS, gateway: gatewayS, adminToken: "admin-t0ken" });
+const reqSetup = reqFor(depsS);
+
+/** A streamed call doesn't return JSON, so this reads the raw SSE text rather than parsing it. */
+async function reqStream(body: unknown, token: string) {
+  const res = await handle(
+    new Request("http://x/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    depsS,
+  );
+  const text = await res.text();
+  return { status: res.status, contentType: res.headers.get("content-type"), raw: text };
+}
+
+await reqSetup("POST", "/v1/keys", { keys: `${keyOf("s")}\n${keyOf("t")}` });
+const issuedS = await reqSetup("POST", "/v1/clients", { name: "streamer" });
+const streamToken = issuedS.body.token as string;
+
+const streamUnauth = await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, "");
+check("streaming needs a client token, not none at all", streamUnauth.status === 401, streamUnauth.raw);
+
+seen.length = 0;
+script = [sse(["Hel", "lo!"])];
+const streamed = await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, streamToken);
+check("a stream request gets a text/event-stream response",
+  streamed.status === 200 && (streamed.contentType ?? "").includes("text/event-stream"), streamed.contentType);
+check("content deltas arrive in the gateway's own envelope, in order",
+  streamed.raw.indexOf('"delta":{"content":"Hel"}') < streamed.raw.indexOf('"delta":{"content":"lo!"}'), streamed.raw);
+check("the stream ends with its own [DONE], not the upstream's", streamed.raw.trim().endsWith("data: [DONE]"), streamed.raw);
+check("x_gateway (key + keys_tried) is attached to the stream", streamed.raw.includes('"x_gateway":{"key"'), streamed.raw);
+
+await depsS.drain();
+const streamedRow = (await storeS.usage(5))[0] as any;
+check("the usage ledger picks up the stream's trailing usage chunk",
+  streamedRow.input_tokens === 5 && streamedRow.output_tokens === 9 && streamedRow.ok === 1, streamedRow);
+
+seen.length = 0;
+script = [rateLimited(), sse(["the second key answered"])];
+const streamRotated = await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, streamToken);
+check("a 429 on the first key rotates to a second before any bytes are streamed",
+  streamRotated.status === 200 && seen.length === 2 && streamRotated.raw.includes("the second key answered"), streamRotated.raw);
+
+seen.length = 0;
+script = [{ status: 400, body: { error: { message: "bad request" } } }];
+const badStream = await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, streamToken);
+check("a 400 is not retried across keys, streaming or not",
+  badStream.status === 400 && seen.length === 1 && badStream.raw.includes('"bad_request"'), badStream.raw);
+
+seen.length = 0;
+script = [sse([])];
+const emptyStream = await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, streamToken);
+check("an empty stream still reaches the client rather than erroring", emptyStream.status === 200, emptyStream.raw);
+await depsS.drain();
+// Not usage(1): two rows in this section can land in the same millisecond
+// (this store's timestamps aren't sub-ms), so recency alone isn't a safe
+// enough tiebreak — find the row by what it actually recorded instead.
+const emptyRow = (await storeS.usage(10)).find((r: any) => typeof r.error === "string" && r.error.includes("empty"));
+check("an empty stream is recorded as a failure after the fact, not silently dropped",
+  !!emptyRow && emptyRow.ok === 0, emptyRow);
 
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");

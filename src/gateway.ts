@@ -94,6 +94,32 @@ export interface EmbeddingResult {
   keysTried: string[];
 }
 
+/** What the usage ledger should record once a stream finishes — see `chatStream`. */
+export interface StreamOutcome {
+  /** The model that actually served it, read off the stream itself. */
+  model: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface StreamCompletion {
+  /** Already reshaped into the gateway's own SSE envelope — ready to hand straight to a client. */
+  body: ReadableStream<Uint8Array>;
+  keyId: number;
+  keyMasked: string;
+  provider: string;
+  keysTried: string[];
+  /**
+   * Resolves once the stream itself finishes — successfully, empty, or cut
+   * short. Only meaningful *after* the Response carrying `body` has already
+   * gone out, so the caller must await this separately (e.g. via
+   * `ctx.waitUntil`) rather than before returning.
+   */
+  outcome: Promise<StreamOutcome>;
+}
+
 export interface GatewayConfig {
   /** The OpenRouter default — kept under its old name for compatibility. */
   defaultModel: string;
@@ -265,26 +291,43 @@ export class Gateway {
    * unlike benching, overriding an admin's own instruction "for safety"
    * would be the wrong call.
    */
+  /**
+   * The rotation candidates for one call: every configured key (optionally
+   * narrowed by `predicate`, e.g. embed()'s "must support embeddings"),
+   * minus anything paused (by hand, or via its provider), preferring
+   * unbenched keys but falling back to every usable one if all of them are
+   * currently benched — see the long comment on `chat()` for why that
+   * fallback exists. Shared by `chat()`, `chatStream()`, and `embed()` so
+   * this rule is written, and tested, exactly once.
+   */
+  private async usableKeys(predicate?: (k: ApiKeyRow) => boolean): Promise<ApiKeyRow[]> {
+    const allKeys = await this.store.keys();
+    const candidates = predicate ? allKeys.filter(predicate) : allKeys;
+    if (candidates.length === 0) {
+      throw new NoKeysConfigured(
+        predicate
+          ? "No key is configured for a provider with an embeddings endpoint (e.g. Mistral). Add one at the admin page."
+          : "No provider key is configured on the gateway. Add one at the admin page.",
+      );
+    }
+    const pausedProviders = await this.store.pausedProviders();
+    const usable = candidates.filter((k) => !k.paused_at && !pausedProviders.has(k.provider));
+    if (usable.length === 0) {
+      throw new NoKeysConfigured(
+        predicate
+          ? "Every embeddings-capable key is paused, or belongs to a paused provider. Resume at least one from the console."
+          : "Every key is paused, or belongs to a paused provider. Resume at least one from the console.",
+      );
+    }
+    const active = usable.filter((k) => !k.benched_at);
+    return active.length > 0 ? active : usable;
+  }
+
   async chat(
     messages: Message[],
     opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
   ): Promise<Completion> {
-    const allKeys = await this.store.keys();
-    if (allKeys.length === 0) {
-      throw new NoKeysConfigured(
-          "No provider key is configured on the gateway. Add one at the admin page.",
-        );
-    }
-    const pausedProviders = await this.store.pausedProviders();
-    const usable = allKeys.filter((k) => !k.paused_at && !pausedProviders.has(k.provider));
-    if (usable.length === 0) {
-      throw new NoKeysConfigured(
-          "Every key is paused, or belongs to a paused provider. Resume at least one from the console.",
-        );
-    }
-    const active = usable.filter((k) => !k.benched_at);
-    const keys = active.length > 0 ? active : usable;
-
+    const keys = await this.usableKeys();
     const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
@@ -340,6 +383,94 @@ export class Gateway {
       lastHardFailure ??
       new GatewayError("Every configured key was rejected.")
     );
+  }
+
+  /**
+   * Same rotation as `chat()`, but the reply is handed back as it arrives
+   * instead of once it's complete.
+   *
+   * Key rotation only ever happens *before* a key commits — a network
+   * failure, a 429, a non-2xx status, exactly the same cases `chat()`
+   * rotates past. The moment a key's response comes back `ok`, bytes start
+   * flowing toward the caller and there is no way back: switching keys after
+   * that would mean either abandoning what the caller already received or
+   * silently duplicating it. So unlike `chat()`, there is no equivalent of
+   * `BadModelOutput` here — an empty stream can only be noticed after the
+   * (empty) stream has already reached the caller, which `streamCompletion`
+   * below surfaces as a failed `outcome` for the usage ledger, not a retry.
+   */
+  async chatStream(
+    messages: Message[],
+    opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
+  ): Promise<StreamCompletion> {
+    const keys = await this.usableKeys();
+    const overrides = await this.store.modelOverrides();
+    const tried: string[] = [];
+    let lastRateLimit: RateLimited | null = null;
+    let lastHardFailure: GatewayError | null = null;
+
+    for (const key of keys) {
+      tried.push(key.masked);
+      const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider, overrides);
+      const body: Record<string, unknown> = {
+        model,
+        messages,
+        stream: true,
+        // The OpenAI-compatible way to get a final usage chunk over SSE.
+        // Every provider here already speaks that same shape (see the
+        // header comment in providers.ts); one that ignores this field just
+        // leaves inputTokens/outputTokens null, which the ledger already
+        // tolerates everywhere else.
+        stream_options: { include_usage: true },
+      };
+      if (opts.jsonObject) body.response_format = { type: "json_object" };
+      if (opts.maxTokens) body.max_tokens = opts.maxTokens;
+
+      let response: Response;
+      try {
+        response = await fetch(this.urlFor(key.provider), {
+          method: "POST",
+          headers: this.headers(key),
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 45_000),
+        });
+      } catch (e) {
+        const err = attributed(new GatewayError(`Could not reach the upstream provider: ${redact((e as Error).message, key)}`), key);
+        await this.store.pushToBack(key.id, false);
+        await this.store.recordFailure(key.id, err.message);
+        lastHardFailure = err;
+        continue;
+      }
+
+      if (response.status === 429) {
+        const { message, resetAt } = await rateLimitDetails(response);
+        await this.store.pushToBack(key.id, true);
+        lastRateLimit = attributed(new RateLimited(message, resetAt), key);
+        continue;
+      }
+      if (!response.ok || !response.body) {
+        const message = response.ok
+          ? "The provider accepted the request but sent no stream body."
+          : `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
+        // A 400 means this gateway's own request was unacceptable — see the
+        // identical branch in chat() — so it is not retried across keys.
+        if (response.status === 400) throw attributed(new BadRequest(message), key);
+        const err = attributed(new GatewayError(message), key);
+        await this.store.pushToBack(key.id, false);
+        await this.store.recordFailure(key.id, err.message);
+        lastHardFailure = err;
+        continue;
+      }
+
+      // Committed: this key is spent on this call, and nothing past this
+      // point can fall back to another one.
+      await this.store.pushToBack(key.id, false);
+      await this.store.clearFailures(key.id);
+      const { body: outBody, outcome } = streamCompletion(response.body, model, key.masked, tried);
+      return { body: outBody, keyId: key.id, keyMasked: key.masked, provider: key.provider, keysTried: tried, outcome };
+    }
+
+    throw lastRateLimit ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
   }
 
   private async postEmbeddings(input: string[], key: ApiKeyRow, model: string): Promise<EmbeddingResult> {
@@ -403,22 +534,7 @@ export class Gateway {
    * model it was asked for.
    */
   async embed(input: string[], opts: { model?: string } = {}): Promise<EmbeddingResult> {
-    const allKeys = (await this.store.keys()).filter((k) => providerOf(k.provider).embeddings);
-    if (allKeys.length === 0) {
-      throw new NoKeysConfigured(
-        "No key is configured for a provider with an embeddings endpoint (e.g. Mistral). Add one at the admin page.",
-      );
-    }
-    const pausedProviders = await this.store.pausedProviders();
-    const usable = allKeys.filter((k) => !k.paused_at && !pausedProviders.has(k.provider));
-    if (usable.length === 0) {
-      throw new NoKeysConfigured(
-        "Every embeddings-capable key is paused, or belongs to a paused provider. Resume at least one from the console.",
-      );
-    }
-    const active = usable.filter((k) => !k.benched_at);
-    const keys = active.length > 0 ? active : usable;
-
+    const keys = await this.usableKeys((k) => Boolean(providerOf(k.provider).embeddings));
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
     let lastHardFailure: GatewayError | null = null;
@@ -711,4 +827,124 @@ async function rateLimitDetails(response: Response): Promise<{ message: string; 
   if (resetAt) message += ` It resets at ${resetAt.slice(0, 16).replace("T", " ")} UTC.`;
   message += " Try again after that, or add another key to the gateway.";
   return { message, resetAt };
+}
+
+/**
+ * Reshapes a committed key's raw upstream SSE bytes into the gateway's own
+ * envelope, the same way `post()` builds its own JSON shape rather than
+ * forwarding a provider's non-streaming reply untouched. Hand-rolled as a
+ * `ReadableStream` (rather than `pipeThrough`/`TransformStream`) so every
+ * way this can end — a clean finish, an upstream read error, or the client
+ * disconnecting (`cancel`) — runs through one `settle()` call and `outcome`
+ * always resolves exactly once, no matter which.
+ */
+function streamCompletion(
+  upstream: ReadableStream<Uint8Array>,
+  requestedModel: string,
+  keyMasked: string,
+  keysTried: string[],
+): { body: ReadableStream<Uint8Array>; outcome: Promise<StreamOutcome> } {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const id = `gw-${Date.now().toString(16)}`;
+  const created = Math.floor(Date.now() / 1000);
+
+  let resolveOutcome!: (o: StreamOutcome) => void;
+  const outcome = new Promise<StreamOutcome>((res) => { resolveOutcome = res; });
+  let settled = false;
+  let finalModel = requestedModel;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  let sawContent = false;
+  let sentMeta = false;
+  let buffer = "";
+
+  const settle = (o: StreamOutcome) => {
+    if (settled) return;
+    settled = true;
+    resolveOutcome(o);
+  };
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = upstream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (payload === "[DONE]") continue; // this stream writes its own, once, in flush below
+
+            let json: {
+              model?: string;
+              usage?: { prompt_tokens?: number; completion_tokens?: number };
+              choices?: { delta?: { content?: string; reasoning?: string }; finish_reason?: string | null }[];
+            };
+            try {
+              json = JSON.parse(payload);
+            } catch {
+              continue; // a stray keep-alive or a line split across chunks — not worth failing the stream over
+            }
+
+            if (typeof json.model === "string") finalModel = json.model;
+            if (json.usage) {
+              inputTokens = json.usage.prompt_tokens ?? inputTokens;
+              outputTokens = json.usage.completion_tokens ?? outputTokens;
+            }
+
+            const choice = json.choices?.[0];
+            if (!choice) continue; // the trailing usage-only chunk has an empty choices array — nothing to forward
+            const delta = choice.delta ?? {};
+            const content = delta.content ?? delta.reasoning;
+            if (content) sawContent = true;
+
+            const outChunk: Record<string, unknown> = {
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model: finalModel,
+              choices: [{ index: 0, delta: content !== undefined ? { content } : delta, finish_reason: choice.finish_reason ?? null }],
+            };
+            if (!sentMeta) {
+              outChunk.x_gateway = { key: keyMasked, keys_tried: keysTried };
+              sentMeta = true;
+            }
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(outChunk)}\n\n`));
+          }
+        }
+
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        settle({
+          model: finalModel,
+          inputTokens,
+          outputTokens,
+          ok: sawContent,
+          error: sawContent ? null : `${finalModel} returned an empty stream.`,
+        });
+        controller.close();
+      } catch (e) {
+        settle({
+          model: finalModel, inputTokens, outputTokens, ok: false,
+          error: `The stream ended early: ${(e as Error).message}`,
+        });
+        controller.error(e);
+      }
+    },
+    cancel(reason) {
+      settle({
+        model: finalModel, inputTokens, outputTokens, ok: sawContent,
+        error: sawContent ? null : "The client disconnected before the stream finished.",
+      });
+      upstream.cancel(reason).catch(() => {});
+    },
+  });
+
+  return { body, outcome };
 }
