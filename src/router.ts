@@ -101,6 +101,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, client, {
             model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
             inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+            keyAttempts: completion.keysTried.length,
           });
           return json({
             data,
@@ -126,6 +127,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
             record(deps, client, {
               model: o.model, keyMasked: streamResult.keyMasked, keyId: streamResult.keyId, provider: streamResult.provider,
               inputTokens: o.inputTokens, outputTokens: o.outputTokens, ok: o.ok, error: o.error,
+              keyAttempts: streamResult.keysTried.length,
             }),
           ));
           return new Response(streamResult.body, {
@@ -146,6 +148,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         await record(deps, client, {
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+          keyAttempts: completion.keysTried.length,
         });
         return json({
           id: `gw-${Date.now().toString(16)}`,
@@ -167,6 +170,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, client, {
             model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
             inputTokens: null, outputTokens: null, ok: false, error: e.message,
+            keyAttempts: e.keysTried.length || null,
           });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
@@ -200,6 +204,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         await record(deps, client, {
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+          keyAttempts: completion.keysTried.length,
         });
         return json(result);
       } catch (e) {
@@ -207,6 +212,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, client, {
             model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
             inputTokens: null, outputTokens: null, ok: false, error: e.message,
+            keyAttempts: e.keysTried.length || null,
           });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
@@ -237,6 +243,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         await record(deps, client, {
           model: result.model, keyMasked: result.keyMasked, keyId: result.keyId, provider: result.provider,
           inputTokens: result.inputTokens, outputTokens: null, ok: true, error: null,
+          keyAttempts: result.keysTried.length,
         });
         return json({
           object: "list",
@@ -250,6 +257,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, client, {
             model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
             inputTokens: null, outputTokens: null, ok: false, error: e.message,
+            keyAttempts: e.keysTried.length || null,
           });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
@@ -261,7 +269,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     if (
       path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
       path === "/v1/usage" || path === "/v1/models" ||
-      path === "/v1/limits" || path.startsWith("/v1/insights") ||
+      path === "/v1/limits" || path === "/v1/reliability" || path.startsWith("/v1/insights") ||
       /^\/v1\/providers\/[^/]+\/(pause|resume)$/.test(path)
     ) {
       if (!deps.adminToken) {
@@ -423,6 +431,12 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       return json(await deps.gateway.limitsView());
     }
 
+    // Retry economics — raw counts; see Store.retryStats for the honest
+    // "without retries vs. with retries" reasoning.
+    if (path === "/v1/reliability" && method === "GET") {
+      return json(await deps.store.retryStats());
+    }
+
     // The gateway reasoning about its own ledger — on demand only, so it
     // never spends a rotation call the admin didn't ask for. Both routes
     // below share the same snapshot; see insights.ts for the prompts.
@@ -434,6 +448,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         await record(deps, "gateway:insights", {
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+          keyAttempts: completion.keysTried.length,
         });
         return json({ ...result, model: completion.model, key: completion.keyMasked, generatedAt: context.generatedAt });
       } catch (e) {
@@ -441,6 +456,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, "gateway:insights", {
             model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
             inputTokens: null, outputTokens: null, ok: false, error: e.message,
+            keyAttempts: e.keysTried.length || null,
           });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
@@ -465,6 +481,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         await record(deps, "gateway:chat-insights", {
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
+          keyAttempts: completion.keysTried.length,
         });
         return json({ answer: completion.content, model: completion.model, key: completion.keyMasked });
       } catch (e) {
@@ -472,6 +489,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           await record(deps, "gateway:chat-insights", {
             model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
             inputTokens: null, outputTokens: null, ok: false, error: e.message,
+            keyAttempts: e.keysTried.length || null,
           });
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
@@ -497,6 +515,7 @@ async function record(deps: RouterDeps, client: string, entry: {
   outputTokens: number | null;
   ok: boolean;
   error: string | null;
+  keyAttempts: number | null;
 }) {
   try {
     await deps.store.record({ client, ...entry });
@@ -507,15 +526,17 @@ async function record(deps: RouterDeps, client: string, entry: {
 
 /**
  * The JSON snapshot both /v1/insights and /v1/insights/chat ground their
- * reply in — usage totals, observed limit signals, clients, and the most
- * recent failures. Everything in it already passed through Store's own
- * masking/redaction on the way in, so there is nothing here an admin
- * couldn't already see on the Console and Limits & health cards.
+ * reply in — usage totals, observed limit signals, retry economics, clients,
+ * and the most recent failures. Everything in it already passed through
+ * Store's own masking/redaction on the way in, so there is nothing here an
+ * admin couldn't already see on the Console, Limits & health, and
+ * Reliability cards.
  */
 async function insightsContext(deps: RouterDeps) {
-  const [summary, limits, recent, clients] = await Promise.all([
+  const [summary, limits, reliability, recent, clients] = await Promise.all([
     deps.store.summary(),
     deps.gateway.limitsView(),
+    deps.store.retryStats(),
     deps.store.usage(25),
     deps.store.clients(),
   ]);
@@ -537,6 +558,7 @@ async function insightsContext(deps: RouterDeps) {
       byProvider: summary.byProvider,
     },
     limits,
+    reliability,
     clients,
     recentFailures,
   };

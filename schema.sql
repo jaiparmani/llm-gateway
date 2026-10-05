@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS usage (
     input_tokens  INTEGER,
     output_tokens INTEGER,
     ok            INTEGER NOT NULL,
-    error         TEXT
+    error         TEXT,
+    -- How many keys this request tried in total — null exactly when it
+    -- never reached a key at all (same nullability as provider/key_id).
+    -- A request with more than one attempt *always* failed on its first
+    -- (the loop only ever advances after a failure), which is what lets
+    -- Store.retryStats() compare first-attempt vs. post-retry success
+    -- honestly, from this column alone. Not the same thing as the
+    -- unrelated Completion.attempts (the /v1/json salvage-retry count).
+    key_attempts  INTEGER
 );
 CREATE INDEX IF NOT EXISTS usage_at ON usage (at DESC);

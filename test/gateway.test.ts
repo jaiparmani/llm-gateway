@@ -1064,6 +1064,102 @@ const elapsedFast = Date.now() - startFast;
 check("beyond the cap, the gateway does not wait — fails fast like before",
   fast.status === 429 && elapsedFast < 300, { elapsedFast, body: fast.body });
 
+console.log("\n── retry analytics: key_attempts recorded, and the Reliability rollup ──");
+
+const dbRL = makeD1(schema);
+const storeRL = new Store(dbRL);
+const gatewayRL = new Gateway(storeRL, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsRL = withWaitUntil({ store: storeRL, gateway: gatewayRL, adminToken: "admin-t0ken" });
+const reqRL = reqFor(depsRL);
+
+const reliabilityUnauth = await reqRL("GET", "/v1/reliability", undefined, "");
+check("GET /v1/reliability needs the admin token", reliabilityUnauth.status === 401, reliabilityUnauth.raw);
+
+await reqRL("POST", "/v1/keys", { keys: `${keyOf("rl1")}\n${keyOf("rl2")}` });
+const issuedRL = await reqRL("POST", "/v1/clients", { name: "retrytest" });
+const rlAnalyticsToken = issuedRL.body.token as string;
+const chatRL = (script_: typeof script) => {
+  script = script_;
+  return reqRL("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, rlAnalyticsToken);
+};
+
+// A deliberately hand-verifiable mix: two first-attempt successes, two
+// retry-rescued successes, and one retry that still exhausts every key.
+seen.length = 0;
+await chatRL([say("first key answered")]);
+await chatRL([say("second key answered")]);
+await chatRL([rateLimited(), say("rescued on the second key")]);
+await chatRL([rateLimited(), say("rescued on the second key again")]);
+await chatRL([rateLimited(), rateLimited()]);
+
+const rlRows = await storeRL.usage(5);
+check("a first-key success records key_attempts: 1",
+  rlRows.some((r: any) => r.key_attempts === 1 && r.ok === 1), rlRows);
+check("a retry-rescued success records key_attempts: 2, ok: 1",
+  rlRows.filter((r: any) => r.key_attempts === 2 && r.ok === 1).length === 2, rlRows);
+check("every key exhausted now records a real key_attempts count and ok: 0 — previously untracked entirely",
+  rlRows.some((r: any) => r.key_attempts === 2 && r.ok === 0), rlRows);
+
+const reliability = await reqRL("GET", "/v1/reliability");
+check("retryStats totals match the hand-verified mix",
+  reliability.body.total === 5 && reliability.body.with_key_attempts === 5 &&
+  reliability.body.first_attempt_ok === 2 && reliability.body.needed_retry === 3 &&
+  reliability.body.retry_rescued === 2 && reliability.body.ok === 4,
+  reliability.body);
+check("avg_key_attempts reflects (1+1+2+2+2)/5", Math.abs(reliability.body.avg_key_attempts - 1.6) < 0.001, reliability.body);
+check("byProvider rolls up the same single-provider mix",
+  reliability.body.byProvider.length === 1 && reliability.body.byProvider[0].total === 5 &&
+  reliability.body.byProvider[0].needed_retry === 3 && reliability.body.byProvider[0].retry_rescued === 2,
+  reliability.body.byProvider);
+
+// A synthetic internal-client row, injected directly rather than through
+// the real /v1/insights flow — retryStats() must not let it move a
+// business number.
+await storeRL.record({
+  client: "gateway:insights", model: "m", keyMasked: "k", keyId: null, provider: "openrouter",
+  inputTokens: 1, outputTokens: 1, ok: true, error: null, keyAttempts: 1,
+});
+const reliabilityAfterInternal = await reqRL("GET", "/v1/reliability");
+check("retryStats excludes gateway:-prefixed internal clients from the business counts",
+  reliabilityAfterInternal.body.total === 5, reliabilityAfterInternal.body);
+
+// A 400 is never retried — exactly one key attempted, not zero.
+const dbBR = makeD1(schema);
+const storeBR = new Store(dbBR);
+const gatewayBR = new Gateway(storeBR, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsBR = withWaitUntil({ store: storeBR, gateway: gatewayBR, adminToken: "admin-t0ken" });
+const reqBR = reqFor(depsBR);
+await reqBR("POST", "/v1/keys", { keys: keyOf("br") });
+const issuedBR = await reqBR("POST", "/v1/clients", { name: "badrequest" });
+seen.length = 0;
+script = [{ status: 400, body: { error: { message: "bad request" } } }];
+await reqBR("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, issuedBR.body.token);
+check("a 400 (never retried) still records key_attempts: 1, not 0 or null",
+  (await storeBR.usage(1))[0]!.key_attempts === 1, await storeBR.usage(1));
+
+// No keys at all — the request never reaches the rotation loop, so there is
+// nothing to count.
+const dbNK = makeD1(schema);
+const storeNK = new Store(dbNK);
+const gatewayNK = new Gateway(storeNK, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsNK = withWaitUntil({ store: storeNK, gateway: gatewayNK, adminToken: "admin-t0ken" });
+const reqNK = reqFor(depsNK);
+const issuedNK = await reqNK("POST", "/v1/clients", { name: "nokeys" });
+await reqNK("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, issuedNK.body.token);
+check("no_keys_configured records key_attempts: null, not 0",
+  (await storeNK.usage(1))[0]!.key_attempts === null, await storeNK.usage(1));
+
+// Streaming reuses the earlier streaming section's store/gateway/deps —
+// still in scope, already has keys configured — rather than standing up
+// another one just for this.
+seen.length = 0;
+script = [rateLimited(), sse(["rescued over a stream"])];
+await reqStream({ messages: [{ role: "user", content: "hi" }], stream: true }, streamToken);
+await depsS.drain();
+const streamRetryRow = (await storeS.usage(20)).find((r: any) => r.key_attempts === 2);
+check("a streamed, retry-rescued success also records key_attempts: 2",
+  !!streamRetryRow && streamRetryRow.ok === 1, streamRetryRow);
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

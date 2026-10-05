@@ -23,6 +23,13 @@ export class GatewayError extends Error {
   keyId: number | null = null;
   keyMasked: string | null = null;
   provider: string | null = null;
+  /**
+   * Every key this request tried before giving up, masked, in order — set
+   * by the rotation loop itself (`chat()`/`chatStream()`/`embed()`) right
+   * before throwing, since only the loop knows the cumulative list; empty
+   * when the request never reached a key at all (`NoKeysConfigured`).
+   */
+  keysTried: string[] = [];
 }
 
 export class NoKeysConfigured extends GatewayError {
@@ -402,6 +409,7 @@ export class Gateway {
           // Not this key's fault, and every other key would fail identically
           // — see the class comment. Nothing moves in the queue either: this
           // attempt never really tested the key.
+          e.keysTried = tried;
           throw e;
         }
         if (e instanceof GatewayError) {
@@ -414,12 +422,9 @@ export class Gateway {
       }
     }
 
-    throw (
-      lastRateLimit ??
-      lastUnusable ??
-      lastHardFailure ??
-      new GatewayError("Every configured key was rejected.")
-    );
+    const giveUp = lastRateLimit ?? lastUnusable ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
+    giveUp.keysTried = tried;
+    throw giveUp;
   }
 
   /**
@@ -492,7 +497,11 @@ export class Gateway {
           : `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
         // A 400 means this gateway's own request was unacceptable — see the
         // identical branch in chat() — so it is not retried across keys.
-        if (response.status === 400) throw attributed(new BadRequest(message), key);
+        if (response.status === 400) {
+          const badRequest = attributed(new BadRequest(message), key);
+          badRequest.keysTried = tried;
+          throw badRequest;
+        }
         const err = attributed(new GatewayError(message), key);
         await this.store.pushToBack(key.id, false);
         await this.store.recordFailure(key.id, err.message);
@@ -508,7 +517,9 @@ export class Gateway {
       return { body: outBody, keyId: key.id, keyMasked: key.masked, provider: key.provider, keysTried: tried, outcome };
     }
 
-    throw lastRateLimit ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
+    const giveUp = lastRateLimit ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
+    giveUp.keysTried = tried;
+    throw giveUp;
   }
 
   private async postEmbeddings(input: string[], key: ApiKeyRow, model: string): Promise<EmbeddingResult> {
@@ -593,7 +604,10 @@ export class Gateway {
           lastRateLimit = e;
           continue;
         }
-        if (e instanceof BadRequest) throw e;
+        if (e instanceof BadRequest) {
+          e.keysTried = tried;
+          throw e;
+        }
         if (e instanceof GatewayError) {
           await this.store.pushToBack(key.id, false);
           await this.store.recordFailure(key.id, e.message);
@@ -604,7 +618,9 @@ export class Gateway {
       }
     }
 
-    throw lastRateLimit ?? lastHardFailure ?? new GatewayError("Every embeddings-capable key was rejected.");
+    const giveUp = lastRateLimit ?? lastHardFailure ?? new GatewayError("Every embeddings-capable key was rejected.");
+    giveUp.keysTried = tried;
+    throw giveUp;
   }
 
   /**
@@ -619,9 +635,11 @@ export class Gateway {
     const maxAttempts = Math.max(1, Math.min(opts.maxAttempts ?? 2, 4));
     let conversation = messages;
     let lastError: SalvageError | null = null;
+    let lastKeysTried: string[] = [];
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const completion = await this.chat(conversation, { ...opts, jsonObject: true });
+      lastKeysTried = completion.keysTried;
       try {
         const data = extractJson(completion.content, opts.expectKey);
         completion.attempts = attempt;
@@ -637,9 +655,15 @@ export class Gateway {
       }
     }
 
-    throw new BadModelOutput(
-        `The model would not return usable JSON after ${maxAttempts} attempts: ${lastError?.message}`,
-      );
+    // Not attributed to a single key — every salvage round itself used
+    // (and recorded against) whichever key(s) it needed; this is the
+    // outer, salvage-level failure. The last round's keysTried is still the
+    // most honest answer for the usage ledger's own attempt count.
+    const badOutput = new BadModelOutput(
+      `The model would not return usable JSON after ${maxAttempts} attempts: ${lastError?.message}`,
+    );
+    badOutput.keysTried = lastKeysTried;
+    throw badOutput;
   }
 
   /**

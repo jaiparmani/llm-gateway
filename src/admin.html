@@ -63,6 +63,12 @@
   .turn.you .bubble{background:#0d0f14}
   .turn.trouble .bubble{border-color:rgba(251,113,133,.28);color:var(--text-2)}
   .turn .meta{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 12px}
+  .bars{display:flex;flex-direction:column;gap:10px}
+  .bar-row{display:flex;align-items:center;gap:12px}
+  .bar-label{width:110px;flex-shrink:0;font-size:12.5px;color:var(--text-2)}
+  .bar-track{flex:1;height:10px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px}
+  .bar-value{width:58px;flex-shrink:0;text-align:right;font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
   [hidden]{display:none!important}
 </style>
 
@@ -237,6 +243,19 @@
         <div style="overflow-x:auto"><table id="limitsByProvider"></table></div>
         <p class="dim" style="margin:16px 0 6px">By key</p>
         <div style="overflow-x:auto"><table id="limitsByKey"></table></div>
+      </div>
+
+      <div class="card">
+        <p class="eyebrow">Reliability</p>
+        <p class="muted" style="margin:0 0 13px">
+          Retrying only ever follows a failure — the gateway moves to the next key the moment
+          one doesn't work. So "without retries" below isn't a simulation: it's exactly what
+          happened on the first key tried, for every call that needed more than one.
+        </p>
+        <div class="bars" id="reliabilityBars"></div>
+        <div class="grid" id="reliabilitySummary" style="margin-top:18px"></div>
+        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <div style="overflow-x:auto"><table id="reliabilityByProvider"></table></div>
       </div>
 
       <div class="card">
@@ -701,7 +720,7 @@
     $("#insightsLocked").hidden = !!token;
     $("#insightsApp").hidden = !token;
     if (!token) return;
-    try { await loadLimits(); } catch (e) { if (e.message !== "unauthorized") alert(e.message); }
+    try { await Promise.all([loadLimits(), loadReliability()]); } catch (e) { if (e.message !== "unauthorized") alert(e.message); }
   }
   $("#goUnlock").onclick = () => show("console", true);
 
@@ -739,6 +758,42 @@
           : '<span class="ok">active</span>'
         }</td></tr>`).join("")
       : `<tr><td class="dim">No keys yet.</td></tr>`;
+  }
+
+  async function loadReliability() {
+    const R = await api("/v1/reliability");
+    const pct = (n, d) => (d ? (100 * n) / d : 0);
+    const withoutRetries = pct(R.first_attempt_ok, R.with_key_attempts);
+    const withRetries = pct(R.ok_with_key_attempts, R.with_key_attempts);
+    const uplift = withRetries - withoutRetries;
+
+    $("#reliabilityBars").innerHTML = R.with_key_attempts ? `
+      <div class="bar-row">
+        <div class="bar-label">Without retries</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${withoutRetries.toFixed(1)}%;background:var(--text-3)"></div></div>
+        <div class="bar-value">${withoutRetries.toFixed(1)}%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">With retries</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${withRetries.toFixed(1)}%;background:var(--accent)"></div></div>
+        <div class="bar-value">${withRetries.toFixed(1)}%</div>
+      </div>
+      <p class="dim" style="margin:4px 0 0">${uplift > 0.05 ? "+" + uplift.toFixed(1) + " points from retrying automatically" : "No measurable uplift yet."}</p>`
+      : `<p class="dim" style="margin:0">Not enough calls yet to tell.</p>`;
+
+    const retryRate = pct(R.needed_retry, R.with_key_attempts);
+    const rescueRate = pct(R.retry_rescued, R.needed_retry);
+    $("#reliabilitySummary").innerHTML = `
+      <div><div class="k">Calls needing a retry</div><div class="v ${retryRate ? "warn" : ""}">${R.with_key_attempts ? retryRate.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Retry rescue rate</div><div class="v ${R.needed_retry ? "ok" : ""}">${R.needed_retry ? rescueRate.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Avg. keys per call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
+
+    $("#reliabilityByProvider").innerHTML = R.byProvider.length
+      ? `<tr><th>Provider</th><th>Calls</th><th>Retry rate</th><th>Rescue rate</th></tr>` + R.byProvider.map((p) => `
+        <tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.total}</td>
+        <td class="num">${pct(p.needed_retry, p.total).toFixed(0)}%</td>
+        <td class="num">${p.needed_retry ? pct(p.retry_rescued, p.needed_retry).toFixed(0) + "%" : "—"}</td></tr>`).join("")
+      : `<tr><td class="dim">Nothing yet.</td></tr>`;
   }
 
   $("#genInsights").onclick = async () => {

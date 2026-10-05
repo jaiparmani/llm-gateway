@@ -342,16 +342,18 @@ export class Store {
     outputTokens: number | null;
     ok: boolean;
     error: string | null;
+    /** How many keys this request tried in total. Null under the same conditions keyId is. See Gateway.GatewayError.keysTried. */
+    keyAttempts: number | null;
   }): Promise<void> {
     const at = now();
     await this.db.batch([
       this.db
         .prepare(
-          `INSERT INTO usage (at, client, model, key_masked, provider, key_id, input_tokens, output_tokens, ok, error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO usage (at, client, model, key_masked, provider, key_id, input_tokens, output_tokens, ok, error, key_attempts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(at, entry.client, entry.model, entry.keyMasked, entry.provider, entry.keyId,
-              entry.inputTokens, entry.outputTokens, entry.ok ? 1 : 0, entry.error),
+              entry.inputTokens, entry.outputTokens, entry.ok ? 1 : 0, entry.error, entry.keyAttempts),
       this.db
         .prepare("UPDATE clients SET calls = calls + 1, last_seen = ? WHERE name = ?")
         .bind(at, entry.client),
@@ -421,6 +423,55 @@ export class Store {
       byClient: byClient ?? [],
       byProvider: byProvider ?? [],
       byKey: byKey ?? [],
+    };
+  }
+
+  /**
+   * Retry economics: raw counts only — percentages are computed client-side,
+   * same convention `summary()`'s own callers already use. Excludes the
+   * Insights feature's own internal calls (`gateway:insights`,
+   * `gateway:chat-insights`) from every count here — those aren't business
+   * traffic and shouldn't move a reliability number.
+   *
+   * `key_attempts = 1 AND ok = 1` is a request that succeeded on the very
+   * first key tried; `key_attempts > 1` is one where that first key failed
+   * (the rotation loop only ever moves on after a failure) — so comparing
+   * those two counts is an honest "without retries vs. with retries"
+   * success rate, not a simulation.
+   */
+  async retryStats(): Promise<Record<string, unknown>> {
+    const totals = await this.db
+      .prepare(
+        `SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(ok), 0) AS ok,
+            COALESCE(SUM(CASE WHEN key_attempts IS NOT NULL THEN 1 ELSE 0 END), 0) AS with_key_attempts,
+            COALESCE(SUM(CASE WHEN key_attempts IS NOT NULL AND ok = 1 THEN 1 ELSE 0 END), 0) AS ok_with_key_attempts,
+            COALESCE(SUM(CASE WHEN key_attempts = 1 AND ok = 1 THEN 1 ELSE 0 END), 0) AS first_attempt_ok,
+            COALESCE(SUM(CASE WHEN key_attempts > 1 THEN 1 ELSE 0 END), 0) AS needed_retry,
+            COALESCE(SUM(CASE WHEN key_attempts > 1 AND ok = 1 THEN 1 ELSE 0 END), 0) AS retry_rescued,
+            COALESCE(AVG(key_attempts), 0) AS avg_key_attempts
+          FROM usage WHERE client NOT LIKE 'gateway:%'`,
+      )
+      .first<Record<string, number>>();
+    const { results: byProvider } = await this.db
+      .prepare(
+        `SELECT
+            provider,
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN key_attempts = 1 AND ok = 1 THEN 1 ELSE 0 END), 0) AS first_attempt_ok,
+            COALESCE(SUM(CASE WHEN key_attempts > 1 THEN 1 ELSE 0 END), 0) AS needed_retry,
+            COALESCE(SUM(CASE WHEN key_attempts > 1 AND ok = 1 THEN 1 ELSE 0 END), 0) AS retry_rescued
+          FROM usage WHERE provider IS NOT NULL AND client NOT LIKE 'gateway:%'
+          GROUP BY provider ORDER BY total DESC`,
+      )
+      .all();
+    return {
+      ...(totals ?? {
+        total: 0, ok: 0, with_key_attempts: 0, ok_with_key_attempts: 0,
+        first_attempt_ok: 0, needed_retry: 0, retry_rescued: 0, avg_key_attempts: 0,
+      }),
+      byProvider: byProvider ?? [],
     };
   }
 }
