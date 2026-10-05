@@ -33,8 +33,11 @@ export class NoKeysConfigured extends GatewayError {
 export class RateLimited extends GatewayError {
   override status = 429;
   override code = "rate_limited";
+  /** When the provider says this key is usable again — null if it didn't say. */
+  resetAt: string | null;
   constructor(message: string, resetAt: string | null) {
     super(message);
+    this.resetAt = resetAt;
     this.extra = { reset_at: resetAt };
   }
 }
@@ -132,6 +135,14 @@ export interface GatewayConfig {
   referer?: string;
   title?: string;
   timeoutMs?: number;
+  /**
+   * When every candidate key is currently known to be rate limited (see
+   * `usableKeys`/`waitForEarliestReset`), wait out the soonest reset rather
+   * than failing immediately — but only up to this long. Default 3000ms:
+   * enough to smooth over a fast-resetting per-minute cap without visibly
+   * hanging a reply.
+   */
+  maxRateLimitWaitMs?: number;
 }
 
 export class Gateway {
@@ -291,14 +302,17 @@ export class Gateway {
    * unlike benching, overriding an admin's own instruction "for safety"
    * would be the wrong call.
    */
+
   /**
    * The rotation candidates for one call: every configured key (optionally
    * narrowed by `predicate`, e.g. embed()'s "must support embeddings"),
    * minus anything paused (by hand, or via its provider), preferring
-   * unbenched keys but falling back to every usable one if all of them are
-   * currently benched — see the long comment on `chat()` for why that
-   * fallback exists. Shared by `chat()`, `chatStream()`, and `embed()` so
-   * this rule is written, and tested, exactly once.
+   * "healthy" — unbenched AND not currently known to be rate limited — but
+   * falling back to every usable key if none qualify, same shape as the old
+   * bench-only fallback and for the same reason: this must never wedge the
+   * queue shut just because every signal it has is bad. Shared by `chat()`,
+   * `chatStream()`, and `embed()` so this rule is written, and tested,
+   * exactly once.
    */
   private async usableKeys(predicate?: (k: ApiKeyRow) => boolean): Promise<ApiKeyRow[]> {
     const allKeys = await this.store.keys();
@@ -319,8 +333,30 @@ export class Gateway {
           : "Every key is paused, or belongs to a paused provider. Resume at least one from the console.",
       );
     }
-    const active = usable.filter((k) => !k.benched_at);
-    return active.length > 0 ? active : usable;
+    const now = Date.now();
+    const healthy = usable.filter((k) => !k.benched_at && (!k.rate_limited_until || Date.parse(k.rate_limited_until) <= now));
+    return healthy.length > 0 ? healthy : usable;
+  }
+
+  /**
+   * When `usableKeys()` had to fall all the way back because every
+   * candidate is currently known to be rate limited, waiting out the
+   * soonest reset beats wasting a request finding that out again — as long
+   * as it isn't far off. A non-empty "healthy" tier from `usableKeys()`
+   * means at least one key has no known `rate_limited_until`, so `resets`
+   * below naturally comes up short of `keys.length` and this is a no-op;
+   * only the true "all of them are limited, and we know until when" case
+   * reaches the actual wait.
+   */
+  private async waitForEarliestReset(keys: ApiKeyRow[]): Promise<void> {
+    const now = Date.now();
+    const resets = keys
+      .map((k) => (k.rate_limited_until ? Date.parse(k.rate_limited_until) : null))
+      .filter((t): t is number => t !== null && t > now);
+    if (resets.length !== keys.length) return;
+    const wait = Math.min(...resets) - now;
+    const cap = this.config.maxRateLimitWaitMs ?? 3000;
+    if (wait > 0 && wait <= cap) await sleep(wait);
   }
 
   async chat(
@@ -328,6 +364,7 @@ export class Gateway {
     opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
   ): Promise<Completion> {
     const keys = await this.usableKeys();
+    await this.waitForEarliestReset(keys);
     const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
@@ -349,7 +386,7 @@ export class Gateway {
         return completion;
       } catch (e) {
         if (e instanceof RateLimited) {
-          await this.store.pushToBack(key.id, true);
+          await this.store.pushToBack(key.id, true, e.resetAt);
           lastRateLimit = e;
           continue;
         }
@@ -404,6 +441,7 @@ export class Gateway {
     opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
   ): Promise<StreamCompletion> {
     const keys = await this.usableKeys();
+    await this.waitForEarliestReset(keys);
     const overrides = await this.store.modelOverrides();
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
@@ -444,7 +482,7 @@ export class Gateway {
 
       if (response.status === 429) {
         const { message, resetAt } = await rateLimitDetails(response);
-        await this.store.pushToBack(key.id, true);
+        await this.store.pushToBack(key.id, true, resetAt);
         lastRateLimit = attributed(new RateLimited(message, resetAt), key);
         continue;
       }
@@ -535,6 +573,7 @@ export class Gateway {
    */
   async embed(input: string[], opts: { model?: string } = {}): Promise<EmbeddingResult> {
     const keys = await this.usableKeys((k) => Boolean(providerOf(k.provider).embeddings));
+    await this.waitForEarliestReset(keys);
     const tried: string[] = [];
     let lastRateLimit: RateLimited | null = null;
     let lastHardFailure: GatewayError | null = null;
@@ -550,7 +589,7 @@ export class Gateway {
         return result;
       } catch (e) {
         if (e instanceof RateLimited) {
-          await this.store.pushToBack(key.id, true);
+          await this.store.pushToBack(key.id, true, e.resetAt);
           lastRateLimit = e;
           continue;
         }
@@ -671,12 +710,14 @@ export class Gateway {
   async queueView(): Promise<Record<string, unknown>> {
     const keys = await this.store.publicKeys();
     const pausedProviders = await this.store.pausedProviders();
-    // Mirrors chat()'s own two-stage filter: a paused key or a paused
-    // provider is never "next" — not even as a last resort — and only within
-    // what is left does an unbenched key win out over a benched one.
+    const now = Date.now();
+    // Mirrors usableKeys()'s own filter: a paused key or a paused provider
+    // is never "next" — not even as a last resort — and only within what is
+    // left does a healthy (unbenched, not currently known-rate-limited) key
+    // win out over one rotation would otherwise have to fall back to.
     const usable = keys.filter((k) => !k.paused && !pausedProviders.has(k.provider));
-    const active = usable.filter((k) => !k.benched);
-    const nextPool = active.length > 0 ? active : usable;
+    const healthy = usable.filter((k) => !k.benched && (!k.rateLimitedUntil || Date.parse(k.rateLimitedUntil) <= now));
+    const nextPool = healthy.length > 0 ? healthy : usable;
     const nextId = nextPool[0]?.id;
     const benchedCount = keys.filter((k) => k.benched).length;
     const pausedCount = keys.length - usable.length;
@@ -700,25 +741,28 @@ export class Gateway {
   /**
    * Observed limit signals, per key and per provider — never a guessed quota.
    * Providers don't reliably expose what their free tier actually allows, so
-   * this only ever reports what already happened: calls in the last 24h and
-   * whether a key was rate-limited inside that same window. For the admin
-   * console's "Limits & health" card.
+   * this only ever reports what already happened: calls in the last 24h,
+   * whether a key was rate-limited inside that same window, and — where a
+   * provider's 429 said when — whether rotation is *currently* skipping it
+   * (see `Gateway.usableKeys`). For the admin console's "Limits & health" card.
    */
   async limitsView(): Promise<{
     keys: {
       id: number; masked: string; label: string; provider: string;
       benched: boolean; paused: boolean; providerPaused: boolean;
-      lastRateLimitedAt: string | null; rateLimitedRecently: boolean; callsLast24h: number;
+      lastRateLimitedAt: string | null; rateLimitedRecently: boolean;
+      rateLimitedUntil: string | null; currentlyLimited: boolean; callsLast24h: number;
     }[];
     byProvider: {
       provider: string; label: string; keys: number; callsLast24h: number;
-      rateLimitedRecently: number; benched: number; paused: number;
+      rateLimitedRecently: number; currentlyLimited: number; benched: number; paused: number;
     }[];
   }> {
     const keys = await this.store.publicKeys();
     const pausedProviders = await this.store.pausedProviders();
     const window = await this.store.usageWindow(24);
     const cutoff = Date.now() - 24 * 3_600_000;
+    const now = Date.now();
 
     const rows = keys.map((k) => ({
       id: k.id,
@@ -730,6 +774,8 @@ export class Gateway {
       providerPaused: pausedProviders.has(k.provider),
       lastRateLimitedAt: k.lastRateLimitedAt,
       rateLimitedRecently: k.lastRateLimitedAt !== null && Date.parse(k.lastRateLimitedAt) >= cutoff,
+      rateLimitedUntil: k.rateLimitedUntil,
+      currentlyLimited: k.rateLimitedUntil !== null && Date.parse(k.rateLimitedUntil) > now,
       callsLast24h: window.byKey[k.id] ?? 0,
     }));
 
@@ -745,6 +791,7 @@ export class Gateway {
       keys: providerRows.length,
       callsLast24h: providerRows.reduce((sum, r) => sum + r.callsLast24h, 0),
       rateLimitedRecently: providerRows.filter((r) => r.rateLimitedRecently).length,
+      currentlyLimited: providerRows.filter((r) => r.currentlyLimited).length,
       benched: providerRows.filter((r) => r.benched).length,
       paused: providerRows.filter((r) => r.paused || r.providerPaused).length,
     }));
@@ -811,22 +858,45 @@ async function providerMessage(response: Response): Promise<string> {
   return text.slice(0, 300) || response.statusText || "no detail given";
 }
 
+/**
+ * RFC 7231's `Retry-After` — either a delta in seconds or an HTTP-date.
+ * The standard channel a 429 reports its reset time on, so checking it
+ * covers every provider here, not just the one with its own proprietary
+ * body field (see `rateLimitDetails`). Null if absent or unparseable.
+ */
+function parseRetryAfter(header: string | null): string | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return new Date(Date.now() + seconds * 1000).toISOString();
+  const asDate = Date.parse(header);
+  return Number.isFinite(asDate) ? new Date(asDate).toISOString() : null;
+}
+
 /** A sentence the caller can act on, plus when it is worth retrying. */
 async function rateLimitDetails(response: Response): Promise<{ message: string; resetAt: string | null }> {
-  let resetAt: string | null = null;
-  try {
-    const body = (await response.json()) as {
-      error?: { metadata?: { headers?: Record<string, string> } };
-    };
-    const raw = body.error?.metadata?.headers?.["X-RateLimit-Reset"];
-    if (raw) resetAt = new Date(Number(raw)).toISOString();
-  } catch {
-    // Providers vary; an absent reset time is not worth failing over.
+  let resetAt = parseRetryAfter(response.headers.get("retry-after"));
+  if (!resetAt) {
+    // OpenRouter's own proprietary shape — kept as a fallback for the one
+    // provider that uses it instead of the standard header above.
+    try {
+      const body = (await response.json()) as {
+        error?: { metadata?: { headers?: Record<string, string> } };
+      };
+      const raw = body.error?.metadata?.headers?.["X-RateLimit-Reset"];
+      if (raw) resetAt = new Date(Number(raw)).toISOString();
+    } catch {
+      // Providers vary; an absent reset time is not worth failing over.
+    }
   }
   let message = "The upstream provider's request quota is used up.";
   if (resetAt) message += ` It resets at ${resetAt.slice(0, 16).replace("T", " ")} UTC.`;
   message += " Try again after that, or add another key to the gateway.";
   return { message, resetAt };
+}
+
+/** A plain wait — used only to hold off a doomed-to-429 retry until a known reset passes. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

@@ -411,8 +411,11 @@
 
   async function load() {
     const k = await api("/v1/keys");
+    const nowIso = new Date().toISOString();
     $("#note").textContent = k.note;
-    $("#keys").innerHTML = k.queue.length ? k.queue.map((x) => `
+    $("#keys").innerHTML = k.queue.length ? k.queue.map((x) => {
+      const stillLimited = x.rateLimitedUntil && x.rateLimitedUntil > nowIso;
+      return `
       <div class="item">
         <span style="width:16px;text-align:center;color:${x.next ? "var(--accent)" : "var(--text-3)"}">${x.next ? "&#9654;" : "&middot;"}</span>
         <div class="grow">
@@ -422,17 +425,20 @@
           <div class="dim" style="margin-top:3px">
             ${x.uses} call${x.uses === 1 ? "" : "s"}${x.totalFailures ? " &middot; " + x.totalFailures + " failure" + (x.totalFailures === 1 ? "" : "s") + " lifetime" : ""}${x.label ? " &middot; " + esc(x.label) : ""}
             ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
+            ${stillLimited ? ' &middot; <span class="warn">limited until ' + esc(when(x.rateLimitedUntil)) + "</span>" : ""}
           </div>
           ${x.benched ? '<div class="bad" style="margin-top:3px;font-size:11.5px">benched — skipped by rotation' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 140)) : "") + "</div>" : ""}
           ${x.paused ? '<div class="bad" style="margin-top:3px;font-size:11.5px">paused by hand — skipped by rotation</div>' : ""}
           ${!x.paused && x.providerPaused ? '<div class="warn" style="margin-top:3px;font-size:11.5px">its provider is paused — skipped by rotation</div>' : ""}
+          ${!x.benched && !x.paused && !x.providerPaused && stillLimited ? '<div class="warn" style="margin-top:3px;font-size:11.5px">known to still be rate limited — skipped by rotation until it resets</div>' : ""}
           <div class="probe" data-probe="${x.id}" hidden></div>
         </div>
         ${x.benched ? `<button class="btn small" data-unbench="${x.id}">Un-bench</button>` : ""}
         <button class="btn small" data-key-toggle="${x.id}" data-paused="${x.paused}">${x.paused ? "Resume" : "Pause"}</button>
         <button class="btn small" data-test="${x.id}">Test</button>
         <button class="btn danger small" data-del="${x.id}">Remove</button>
-      </div>`).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
+      </div>`;
+    }).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
 
     document.querySelectorAll("[data-key-toggle]").forEach((b) => (b.onclick = async () => {
       const wasPaused = b.dataset.paused === "true";
@@ -703,18 +709,21 @@
     const L = await api("/v1/limits");
     const calls24h = L.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
     const rateLimited = L.keys.filter((k) => k.rateLimitedRecently).length;
+    const currentlyLimited = L.keys.filter((k) => k.currentlyLimited).length;
     const benched = L.keys.filter((k) => k.benched).length;
     const paused = L.keys.filter((k) => k.paused || k.providerPaused).length;
     $("#limitsSummary").innerHTML = `
       <div><div class="k">Keys</div><div class="v">${L.keys.length}</div></div>
       <div><div class="k">Calls, 24h</div><div class="v">${calls24h}</div></div>
+      <div><div class="k">Limited right now</div><div class="v ${currentlyLimited ? "warn" : ""}">${currentlyLimited}</div></div>
       <div><div class="k">Rate limited, 24h</div><div class="v ${rateLimited ? "warn" : ""}">${rateLimited}</div></div>
       <div><div class="k">Benched</div><div class="v ${benched ? "bad" : ""}">${benched}</div></div>
       <div><div class="k">Paused</div><div class="v ${paused ? "warn" : ""}">${paused}</div></div>`;
 
     $("#limitsByProvider").innerHTML = L.byProvider.length
-      ? `<tr><th>Provider</th><th>Keys</th><th>Calls, 24h</th><th>Rate limited</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `
+      ? `<tr><th>Provider</th><th>Keys</th><th>Calls, 24h</th><th>Limited now</th><th>Rate limited, 24h</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `
         <tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td>
+        <td class="num ${p.currentlyLimited ? "warn" : ""}">${p.currentlyLimited}</td>
         <td class="num ${p.rateLimitedRecently ? "warn" : ""}">${p.rateLimitedRecently}</td>
         <td class="num ${p.benched ? "bad" : ""}">${p.benched}</td><td class="num ${p.paused ? "warn" : ""}">${p.paused}</td></tr>`).join("")
       : `<tr><td class="dim">No keys configured.</td></tr>`;
@@ -725,6 +734,7 @@
         <td>${
           k.benched ? '<span class="bad">benched</span>'
           : (k.paused || k.providerPaused) ? '<span class="warn">paused</span>'
+          : k.currentlyLimited ? '<span class="warn">limited until ' + esc(when(k.rateLimitedUntil)) + '</span>'
           : k.rateLimitedRecently ? '<span class="warn">rate limited</span>'
           : '<span class="ok">active</span>'
         }</td></tr>`).join("")

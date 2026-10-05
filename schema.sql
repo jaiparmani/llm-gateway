@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
     uses                 INTEGER NOT NULL DEFAULT 0,
     last_used_at         TEXT,
     last_rate_limited_at TEXT,
+    -- When the provider's own 429 said this key would be usable again (from
+    -- Retry-After or OpenRouter's reset-time metadata) — null whenever that
+    -- isn't known. Unlike last_rate_limited_at (history), rotation reads this
+    -- to skip a key it already knows is still spent instead of round-robining
+    -- into it; see Gateway.usableKeys and Gateway.waitForEarliestReset.
+    rate_limited_until   TEXT,
     -- Real-failure tracking (see migrations/0003 and Gateway.chat) — a 429
     -- never touches these, only a failure that is actual evidence the key or
     -- its provider is broken. consecutive_failures resets to 0 on a success;

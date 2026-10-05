@@ -17,6 +17,8 @@ export interface ApiKeyRow {
   uses: number;
   last_used_at: string | null;
   last_rate_limited_at: string | null;
+  /** When the provider's 429 said this key is usable again — null when unknown. See Gateway.usableKeys. */
+  rate_limited_until: string | null;
   created_at: string;
   // Real-failure tracking — see Gateway.chat for what counts as "real" and
   // BENCH_THRESHOLD below. A 429 never touches these; the key is merely spent.
@@ -38,6 +40,8 @@ export interface PublicKey {
   uses: number;
   lastUsedAt: string | null;
   lastRateLimitedAt: string | null;
+  /** Still in the future means rotation is currently skipping this key — see Gateway.usableKeys. */
+  rateLimitedUntil: string | null;
   createdAt: string;
   benched: boolean;
   benchedAt: string | null;
@@ -88,6 +92,7 @@ function publicKey(row: ApiKeyRow): PublicKey {
     uses: row.uses,
     lastUsedAt: row.last_used_at,
     lastRateLimitedAt: row.last_rate_limited_at,
+    rateLimitedUntil: row.rate_limited_until,
     createdAt: row.created_at,
     benched: row.benched_at !== null,
     benchedAt: row.benched_at,
@@ -153,8 +158,13 @@ export class Store {
    *
    * One statement, so two concurrent requests cannot read the same MAX(position)
    * and both land on it.
+   *
+   * `rateLimitedUntil` is whatever the provider's 429 said (or null, if it
+   * said nothing parseable) and is written unconditionally — including as
+   * null on every non-429 call, which is what clears a stale value once a
+   * key is used again at all, successful or not. See Gateway.usableKeys.
    */
-  async pushToBack(id: number, rateLimited: boolean): Promise<void> {
+  async pushToBack(id: number, rateLimited: boolean, rateLimitedUntil: string | null = null): Promise<void> {
     const at = now();
     await this.db
       .prepare(
@@ -162,10 +172,11 @@ export class Store {
             SET position = (SELECT COALESCE(MAX(position), 0) + 1 FROM api_keys),
                 uses = uses + 1,
                 last_used_at = ?,
-                last_rate_limited_at = CASE WHEN ? = 1 THEN ? ELSE last_rate_limited_at END
+                last_rate_limited_at = CASE WHEN ? = 1 THEN ? ELSE last_rate_limited_at END,
+                rate_limited_until = ?
           WHERE id = ?`,
       )
-      .bind(at, rateLimited ? 1 : 0, at, id)
+      .bind(at, rateLimited ? 1 : 0, at, rateLimitedUntil, id)
       .run();
   }
 

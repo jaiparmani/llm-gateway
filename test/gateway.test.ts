@@ -29,8 +29,9 @@ function withWaitUntil<T extends { store: Store; gateway: Gateway; adminToken: s
 
 // ── a stub OpenRouter ───────────────────────────────────────────────────────
 // A scripted reply is either a normal JSON body, or `raw: true` with `body`
-// as a preformatted SSE text payload — for exercising streaming.
-let script: { status: number; body: unknown; raw?: boolean }[] = [];
+// as a preformatted SSE text payload — for exercising streaming. `headers`
+// adds to (or overrides) the response's own, e.g. a real Retry-After.
+let script: { status: number; body: unknown; raw?: boolean; headers?: Record<string, string> }[] = [];
 const seen: { auth: string; body: any }[] = [];
 
 const stub = createServer(async (req, res) => {
@@ -40,11 +41,11 @@ const stub = createServer(async (req, res) => {
   const next = script.shift() ?? { status: 200, body: { choices: [{ message: { content: "{}" } }] } };
   const key = seen.at(-1)!.auth.replace("Bearer ", "");
   if (next.raw) {
-    res.writeHead(next.status, { "content-type": "text/event-stream" });
+    res.writeHead(next.status, { "content-type": "text/event-stream", ...next.headers });
     res.end(String(next.body).split("__KEY__").join(key));
     return;
   }
-  res.writeHead(next.status, { "content-type": "application/json" });
+  res.writeHead(next.status, { "content-type": "application/json", ...next.headers });
   // __KEY__ stands for whichever key this call actually carried, so a scripted
   // reply can echo the credential back the way a real provider might.
   res.end(JSON.stringify(next.body).split("__KEY__").join(key));
@@ -60,6 +61,17 @@ const rateLimited = (reset = "1789000000000") => ({
   status: 429,
   body: { error: { metadata: { headers: { "X-RateLimit-Reset": reset } } } },
 });
+/**
+ * A 429 with a genuinely future reset, computed from the real clock at test
+ * time — unlike `rateLimited()` above, whose fixed historical timestamp is
+ * now permanently in the past and so never exercises the skip/wait logic.
+ * `viaHeader` sends it as the standard Retry-After header (what most
+ * providers actually send); otherwise it's OpenRouter's own body field.
+ */
+const rateLimitedUntil = (msFromNow: number, viaHeader = true) =>
+  viaHeader
+    ? { status: 429, body: { error: { message: "rate limited" } }, headers: { "retry-after": String(Math.ceil(msFromNow / 1000)) } }
+    : { status: 429, body: { error: { metadata: { headers: { "X-RateLimit-Reset": String(Date.now() + msFromNow) } } } } };
 // A hard failure — not a 429, not an empty completion — the kind that now
 // rotates to the next key and counts toward benching one.
 const serverError = () => ({
@@ -978,6 +990,79 @@ await depsS.drain();
 const emptyRow = (await storeS.usage(10)).find((r: any) => typeof r.error === "string" && r.error.includes("empty"));
 check("an empty stream is recorded as a failure after the fact, not silently dropped",
   !!emptyRow && emptyRow.ok === 0, emptyRow);
+
+console.log("\n── rate-limit-aware rotation: skip known-limited keys, wait out short ones ──");
+
+// ── persistence: a 429's reset time is remembered, not thrown away ──
+const dbR = makeD1(schema);
+const storeR = new Store(dbR);
+const gatewayR = new Gateway(storeR, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000, maxRateLimitWaitMs: 50 });
+const depsR = withWaitUntil({ store: storeR, gateway: gatewayR, adminToken: "admin-t0ken" });
+const reqR = reqFor(depsR);
+
+await reqR("POST", "/v1/keys", { keys: keyOf("r1") });
+const issuedR = await reqR("POST", "/v1/clients", { name: "ratelimit" });
+const rlToken = issuedR.body.token as string;
+
+seen.length = 0;
+script = [rateLimitedUntil(60_000)]; // via the standard Retry-After header, 60s out
+await reqR("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, rlToken);
+const afterHeader = (await reqR("GET", "/v1/keys")).body.queue[0];
+check("a Retry-After header persists rate_limited_until, roughly where it said",
+  afterHeader.rateLimitedUntil && Math.abs(Date.parse(afterHeader.rateLimitedUntil) - (Date.now() + 60_000)) < 5000,
+  afterHeader);
+
+// ── skip: a known-still-limited key is never even tried while a free one exists ──
+await reqR("POST", "/v1/keys", { keys: keyOf("r2") });
+seen.length = 0;
+script = [say("the free key answered")];
+const freeFirst = await reqR("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, rlToken);
+check("rotation skips the still-limited key entirely, going straight to the free one",
+  freeFirst.status === 200 && JSON.stringify(keysUsed()) === JSON.stringify([keyOf("r2")]), keysUsed());
+
+// ── bounded wait: every key limited, soonest reset inside the cap ──
+const dbW = makeD1(schema);
+const storeW = new Store(dbW);
+const gatewayW = new Gateway(storeW, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000, maxRateLimitWaitMs: 500 });
+const depsW = withWaitUntil({ store: storeW, gateway: gatewayW, adminToken: "admin-t0ken" });
+const reqW = reqFor(depsW);
+await reqW("POST", "/v1/keys", { keys: keyOf("w") });
+const issuedW = await reqW("POST", "/v1/clients", { name: "waiter" });
+const waitToken = issuedW.body.token as string;
+
+seen.length = 0;
+script = [rateLimitedUntil(80, false)]; // OpenRouter's own body metadata, exact ms precision, 80ms out
+await reqW("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, waitToken);
+
+seen.length = 0;
+script = [say("made it through after the wait")];
+const startWait = Date.now();
+const waited = await reqW("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, waitToken);
+const elapsedWait = Date.now() - startWait;
+check("the gateway waits out a short, known reset instead of failing immediately",
+  waited.status === 200 && elapsedWait >= 50, { elapsedWait, body: waited.body });
+
+// ── beyond the cap: fails fast, same as before this feature existed ──
+const dbF = makeD1(schema);
+const storeF = new Store(dbF);
+const gatewayF = new Gateway(storeF, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000, maxRateLimitWaitMs: 50 });
+const depsF = withWaitUntil({ store: storeF, gateway: gatewayF, adminToken: "admin-t0ken" });
+const reqF = reqFor(depsF);
+await reqF("POST", "/v1/keys", { keys: keyOf("f") });
+const issuedF = await reqF("POST", "/v1/clients", { name: "fastfail" });
+const fastToken = issuedF.body.token as string;
+
+seen.length = 0;
+script = [rateLimitedUntil(10_000, false)]; // 10s out, well beyond the 50ms cap
+await reqF("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, fastToken);
+
+seen.length = 0;
+script = [rateLimited()]; // still genuinely limited — the immediate retry finds that out again
+const startFast = Date.now();
+const fast = await reqF("POST", "/v1/chat/completions", { messages: [{ role: "user", content: "hi" }] }, fastToken);
+const elapsedFast = Date.now() - startFast;
+check("beyond the cap, the gateway does not wait — fails fast like before",
+  fast.status === 429 && elapsedFast < 300, { elapsedFast, body: fast.body });
 
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
