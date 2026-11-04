@@ -30,6 +30,13 @@ export class GatewayError extends Error {
    * when the request never reached a key at all (`NoKeysConfigured`).
    */
   keysTried: string[] = [];
+  /** Assigned by the rotation loop so the usage ledger can tie errors back to a request. */
+  requestId: string = "";
+}
+
+/** Generates a gateway request id — short, URL-safe, collision-resistant enough for a personal gateway. */
+export function generateRequestId(): string {
+  return `gw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 export class NoKeysConfigured extends GatewayError {
@@ -84,6 +91,7 @@ export interface Completion {
   content: string;
   /** The model that ACTUALLY served it — the free pool differs per call. */
   model: string;
+  finishReason: string;
   inputTokens: number | null;
   outputTokens: number | null;
   keyId: number;
@@ -91,6 +99,8 @@ export interface Completion {
   provider: string;
   attempts: number;
   keysTried: string[];
+  requestId: string;
+  latencyMs: number;
 }
 
 export interface EmbeddingResult {
@@ -102,6 +112,8 @@ export interface EmbeddingResult {
   keyMasked: string;
   provider: string;
   keysTried: string[];
+  requestId: string;
+  latencyMs: number;
 }
 
 /** What the usage ledger should record once a stream finishes — see `chatStream`. */
@@ -121,6 +133,7 @@ export interface StreamCompletion {
   keyMasked: string;
   provider: string;
   keysTried: string[];
+  requestId: string;
   /**
    * Resolves once the stream itself finishes — successfully, empty, or cut
    * short. Only meaningful *after* the Response carrying `body` has already
@@ -192,6 +205,7 @@ export class Gateway {
     model: string,
     maxTokens: number | undefined,
     jsonObject: boolean,
+    requestId: string,
   ): Promise<Completion> {
     const body: Record<string, unknown> = { model, messages };
     if (jsonObject) {
@@ -215,29 +229,30 @@ export class Gateway {
 
     if (response.status === 429) {
       const { message, resetAt } = await rateLimitDetails(response);
+      // Even a 429 often carries rate-limit snapshot headers — capture them.
+      const snapshot = parseRateLimitHeaders(response);
+      await this.store.updateRateLimitSnapshot(key.id, snapshot);
       throw attributed(new RateLimited(message, resetAt), key);
     }
     if (!response.ok) {
-      // The provider's own sentence rather than its JSON envelope, and redacted:
-      // an upstream that echoes back the credential it rejected must not turn a
-      // 401 into the one thing this service never lets out.
       const message = `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
-      // A 400 is the gateway's own request being unacceptable — a parameter
-      // the model does not support, most likely — not a verdict on the key.
-      // See BadRequest and the branch for it in chat().
       throw attributed(response.status === 400 ? new BadRequest(message) : new GatewayError(message), key);
     }
 
+    // Proactive rate-limit header capture — the main source of accurate
+    // quota data for the monitoring UI. A 200 with x-ratelimit-remaining: 3
+    // is more useful than waiting for the eventual 429.
+    const snapshot = parseRateLimitHeaders(response);
+    await this.store.updateRateLimitSnapshot(key.id, snapshot);
+
     const payload = (await response.json()) as {
-      choices?: { message?: { content?: string; reasoning?: string } }[];
+      choices?: { message?: { content?: string; reasoning?: string }; finish_reason?: string | null }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       model?: string;
     };
-    const message = payload.choices?.[0]?.message;
-    // Reasoning models in the free pool sometimes spend the whole token budget
-    // thinking and return an empty `content` with the answer in `reasoning`.
-    // Taking the reasoning is worse than a clean answer and better than nothing.
-    const content = message?.content || message?.reasoning;
+    const choice = payload.choices?.[0];
+    const msg = choice?.message;
+    const content = msg?.content || msg?.reasoning;
     if (!content) {
       throw attributed(
         new BadModelOutput(
@@ -253,6 +268,7 @@ export class Gateway {
     return {
       content,
       model: payload.model ?? model,
+      finishReason: choice?.finish_reason ?? "stop",
       inputTokens: payload.usage?.prompt_tokens ?? null,
       outputTokens: payload.usage?.completion_tokens ?? null,
       keyId: key.id,
@@ -260,6 +276,8 @@ export class Gateway {
       provider: key.provider,
       attempts: 1,
       keysTried: [],
+      requestId,
+      latencyMs: 0, // filled by the rotation loop
     };
   }
 
@@ -368,8 +386,10 @@ export class Gateway {
 
   async chat(
     messages: Message[],
-    opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
+    opts: { model?: string; maxTokens?: number; jsonObject?: boolean; requestId?: string } = {},
   ): Promise<Completion> {
+    const requestId = opts.requestId ?? generateRequestId();
+    const startMs = Date.now();
     const keys = await this.usableKeys();
     await this.waitForEarliestReset(keys);
     const overrides = await this.store.modelOverrides();
@@ -381,15 +401,13 @@ export class Gateway {
     for (const key of keys) {
       tried.push(key.masked);
       try {
-        // A caller-supplied model is only meaningful for the provider whose
-        // namespace it names. Only OpenRouter's `model` has ever been safe to
-        // pass through generically — everyone else's model ids are provider-
-        // specific, so those keys stick to their own configured default.
         const model = key.provider === "openrouter" && opts.model ? opts.model : this.modelFor(key.provider, overrides);
-        const completion = await this.post(messages, key, model, opts.maxTokens, !!opts.jsonObject);
+        const completion = await this.post(messages, key, model, opts.maxTokens, !!opts.jsonObject, requestId);
         await this.store.pushToBack(key.id, false);
         await this.store.clearFailures(key.id);
         completion.keysTried = tried;
+        completion.requestId = requestId;
+        completion.latencyMs = Date.now() - startMs;
         return completion;
       } catch (e) {
         if (e instanceof RateLimited) {
@@ -398,18 +416,13 @@ export class Gateway {
           continue;
         }
         if (e instanceof BadModelOutput) {
-          // The key worked; the model behind it did not. Spend the call and
-          // move on, so the next attempt lands on a different model. Not
-          // counted as a key failure, for the same reason.
           await this.store.pushToBack(key.id, false);
           lastUnusable = e;
           continue;
         }
         if (e instanceof BadRequest) {
-          // Not this key's fault, and every other key would fail identically
-          // — see the class comment. Nothing moves in the queue either: this
-          // attempt never really tested the key.
           e.keysTried = tried;
+          e.requestId = requestId;
           throw e;
         }
         if (e instanceof GatewayError) {
@@ -424,6 +437,7 @@ export class Gateway {
 
     const giveUp = lastRateLimit ?? lastUnusable ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
     giveUp.keysTried = tried;
+    giveUp.requestId = requestId;
     throw giveUp;
   }
 
@@ -443,8 +457,9 @@ export class Gateway {
    */
   async chatStream(
     messages: Message[],
-    opts: { model?: string; maxTokens?: number; jsonObject?: boolean } = {},
+    opts: { model?: string; maxTokens?: number; jsonObject?: boolean; requestId?: string } = {},
   ): Promise<StreamCompletion> {
+    const requestId = opts.requestId ?? generateRequestId();
     const keys = await this.usableKeys();
     await this.waitForEarliestReset(keys);
     const overrides = await this.store.modelOverrides();
@@ -459,11 +474,6 @@ export class Gateway {
         model,
         messages,
         stream: true,
-        // The OpenAI-compatible way to get a final usage chunk over SSE.
-        // Every provider here already speaks that same shape (see the
-        // header comment in providers.ts); one that ignores this field just
-        // leaves inputTokens/outputTokens null, which the ledger already
-        // tolerates everywhere else.
         stream_options: { include_usage: true },
       };
       if (opts.jsonObject) body.response_format = { type: "json_object" };
@@ -487,6 +497,8 @@ export class Gateway {
 
       if (response.status === 429) {
         const { message, resetAt } = await rateLimitDetails(response);
+        const rlSnapshot = parseRateLimitHeaders(response);
+        await this.store.updateRateLimitSnapshot(key.id, rlSnapshot);
         await this.store.pushToBack(key.id, true, resetAt);
         lastRateLimit = attributed(new RateLimited(message, resetAt), key);
         continue;
@@ -495,11 +507,10 @@ export class Gateway {
         const message = response.ok
           ? "The provider accepted the request but sent no stream body."
           : `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
-        // A 400 means this gateway's own request was unacceptable — see the
-        // identical branch in chat() — so it is not retried across keys.
         if (response.status === 400) {
           const badRequest = attributed(new BadRequest(message), key);
           badRequest.keysTried = tried;
+          badRequest.requestId = requestId;
           throw badRequest;
         }
         const err = attributed(new GatewayError(message), key);
@@ -509,16 +520,19 @@ export class Gateway {
         continue;
       }
 
-      // Committed: this key is spent on this call, and nothing past this
-      // point can fall back to another one.
+      // Proactive rate-limit snapshot from the streaming response headers.
+      const streamSnapshot = parseRateLimitHeaders(response);
+      await this.store.updateRateLimitSnapshot(key.id, streamSnapshot);
+
       await this.store.pushToBack(key.id, false);
       await this.store.clearFailures(key.id);
       const { body: outBody, outcome } = streamCompletion(response.body, model, key.masked, tried);
-      return { body: outBody, keyId: key.id, keyMasked: key.masked, provider: key.provider, keysTried: tried, outcome };
+      return { body: outBody, keyId: key.id, keyMasked: key.masked, provider: key.provider, keysTried: tried, requestId, outcome };
     }
 
     const giveUp = lastRateLimit ?? lastHardFailure ?? new GatewayError("Every configured key was rejected.");
     giveUp.keysTried = tried;
+    giveUp.requestId = requestId;
     throw giveUp;
   }
 
@@ -546,12 +560,18 @@ export class Gateway {
 
     if (response.status === 429) {
       const { message, resetAt } = await rateLimitDetails(response);
+      const rlSnapshot = parseRateLimitHeaders(response);
+      await this.store.updateRateLimitSnapshot(key.id, rlSnapshot);
       throw attributed(new RateLimited(message, resetAt), key);
     }
     if (!response.ok) {
       const message = `The provider returned ${response.status}: ${redact(await providerMessage(response), key)}`;
       throw attributed(response.status === 400 ? new BadRequest(message) : new GatewayError(message), key);
     }
+
+    // Proactive rate-limit snapshot.
+    const embSnapshot = parseRateLimitHeaders(response);
+    await this.store.updateRateLimitSnapshot(key.id, embSnapshot);
 
     const payload = (await response.json()) as {
       data?: { embedding?: number[]; index?: number }[];
@@ -571,6 +591,8 @@ export class Gateway {
       keyMasked: key.masked,
       provider: key.provider,
       keysTried: [],
+      requestId: "",
+      latencyMs: 0,
     };
   }
 
@@ -582,7 +604,9 @@ export class Gateway {
    * free chat pool has, since an embeddings endpoint always serves the one
    * model it was asked for.
    */
-  async embed(input: string[], opts: { model?: string } = {}): Promise<EmbeddingResult> {
+  async embed(input: string[], opts: { model?: string; requestId?: string } = {}): Promise<EmbeddingResult> {
+    const requestId = opts.requestId ?? generateRequestId();
+    const startMs = Date.now();
     const keys = await this.usableKeys((k) => Boolean(providerOf(k.provider).embeddings));
     await this.waitForEarliestReset(keys);
     const tried: string[] = [];
@@ -597,6 +621,8 @@ export class Gateway {
         await this.store.pushToBack(key.id, false);
         await this.store.clearFailures(key.id);
         result.keysTried = tried;
+        result.requestId = requestId;
+        result.latencyMs = Date.now() - startMs;
         return result;
       } catch (e) {
         if (e instanceof RateLimited) {
@@ -606,6 +632,7 @@ export class Gateway {
         }
         if (e instanceof BadRequest) {
           e.keysTried = tried;
+          e.requestId = requestId;
           throw e;
         }
         if (e instanceof GatewayError) {
@@ -620,6 +647,7 @@ export class Gateway {
 
     const giveUp = lastRateLimit ?? lastHardFailure ?? new GatewayError("Every embeddings-capable key was rejected.");
     giveUp.keysTried = tried;
+    giveUp.requestId = requestId;
     throw giveUp;
   }
 
@@ -801,6 +829,12 @@ export class Gateway {
       rateLimitedUntil: k.rateLimitedUntil,
       currentlyLimited: k.rateLimitedUntil !== null && Date.parse(k.rateLimitedUntil) > now,
       callsLast24h: window.byKey[k.id] ?? 0,
+      // Observed rate-limit snapshot from response headers — null fields
+      // mean the provider has not reported them, which the UI shows honestly.
+      rateLimitLimit: k.rateLimitLimit,
+      rateLimitRemaining: k.rateLimitRemaining,
+      rateLimitReset: k.rateLimitReset,
+      rateLimitObservedAt: k.rateLimitObservedAt,
     }));
 
     const byProviderId = new Map<string, typeof rows>();
@@ -916,6 +950,51 @@ async function rateLimitDetails(response: Response): Promise<{ message: string; 
   if (resetAt) message += ` It resets at ${resetAt.slice(0, 16).replace("T", " ")} UTC.`;
   message += " Try again after that, or add another key to the gateway.";
   return { message, resetAt };
+}
+
+/**
+ * Extracts the provider's rate-limit snapshot from response headers.
+ * Most OpenAI-compatible providers send `x-ratelimit-limit`,
+ * `x-ratelimit-remaining`, and `x-ratelimit-reset` on every response
+ * — not only on 429s — so capturing them proactively gives the
+ * monitoring UI honest, observed quota data rather than nothing-until-
+ * the-429-arrives. Returns all-nulls when no headers are present.
+ */
+function parseRateLimitHeaders(response: Response): {
+  limit: number | null;
+  remaining: number | null;
+  reset: string | null;
+} {
+  const limitRaw = response.headers.get("x-ratelimit-limit-requests")
+    ?? response.headers.get("x-ratelimit-limit");
+  const remainingRaw = response.headers.get("x-ratelimit-remaining-requests")
+    ?? response.headers.get("x-ratelimit-remaining");
+  const resetRaw = response.headers.get("x-ratelimit-reset-requests")
+    ?? response.headers.get("x-ratelimit-reset");
+
+  const limit = limitRaw !== null ? parseInt(limitRaw, 10) : NaN;
+  const remaining = remainingRaw !== null ? parseInt(remainingRaw, 10) : NaN;
+
+  let reset: string | null = null;
+  if (resetRaw) {
+    const asNum = Number(resetRaw);
+    if (Number.isFinite(asNum) && asNum > 1_000_000_000) {
+      // Unix timestamp in seconds (e.g. OpenRouter's x-ratelimit-reset).
+      reset = new Date(asNum * 1000).toISOString();
+    } else if (Number.isFinite(asNum) && asNum >= 0) {
+      // Delta in seconds.
+      reset = new Date(Date.now() + asNum * 1000).toISOString();
+    } else {
+      const parsed = Date.parse(resetRaw);
+      if (Number.isFinite(parsed)) reset = new Date(parsed).toISOString();
+    }
+  }
+
+  return {
+    limit: Number.isFinite(limit) ? limit : null,
+    remaining: Number.isFinite(remaining) ? remaining : null,
+    reset,
+  };
 }
 
 /** A plain wait — used only to hold off a doomed-to-429 retry until a known reset passes. */

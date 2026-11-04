@@ -29,6 +29,11 @@ export interface ApiKeyRow {
   total_failures: number;
   /** A manual "stop using this key" from the console. See the schema comment. */
   paused_at: string | null;
+  // Rate-limit snapshot from the provider's response headers.
+  rate_limit_limit: number | null;
+  rate_limit_remaining: number | null;
+  rate_limit_reset: string | null;
+  rate_limit_observed_at: string | null;
 }
 
 /** What the API and UI are allowed to see. Never includes the key. */
@@ -52,6 +57,14 @@ export interface PublicKey {
   totalFailures: number;
   paused: boolean;
   pausedAt: string | null;
+  /** Provider-reported rate limit (requests per window). Null = never reported. */
+  rateLimitLimit: number | null;
+  /** Provider-reported remaining requests in the current window. Null = never reported. */
+  rateLimitRemaining: number | null;
+  /** Provider-reported window reset time. Null = never reported. */
+  rateLimitReset: string | null;
+  /** When the snapshot was last observed from response headers. */
+  rateLimitObservedAt: string | null;
 }
 
 export interface ClientRow {
@@ -100,6 +113,10 @@ function publicKey(row: ApiKeyRow): PublicKey {
     totalFailures: row.total_failures,
     paused: row.paused_at !== null,
     pausedAt: row.paused_at,
+    rateLimitLimit: row.rate_limit_limit,
+    rateLimitRemaining: row.rate_limit_remaining,
+    rateLimitReset: row.rate_limit_reset,
+    rateLimitObservedAt: row.rate_limit_observed_at,
   };
 }
 
@@ -246,6 +263,30 @@ export class Store {
     return (result.meta.changes ?? 0) > 0;
   }
 
+  /**
+   * Updates the rate-limit snapshot on a key from the provider's response
+   * headers. Only writes when at least one header was present — a response
+   * with no x-ratelimit-* headers does not overwrite a previous snapshot,
+   * so the UI's "last observed" timestamp stays honest.
+   */
+  async updateRateLimitSnapshot(
+    id: number,
+    snapshot: { limit: number | null; remaining: number | null; reset: string | null },
+  ): Promise<void> {
+    if (snapshot.limit === null && snapshot.remaining === null && snapshot.reset === null) return;
+    await this.db
+      .prepare(
+        `UPDATE api_keys
+            SET rate_limit_limit = ?,
+                rate_limit_remaining = ?,
+                rate_limit_reset = ?,
+                rate_limit_observed_at = ?
+          WHERE id = ?`,
+      )
+      .bind(snapshot.limit, snapshot.remaining, snapshot.reset, now(), id)
+      .run();
+  }
+
   // ── provider pausing ─────────────────────────────────────────────────────
 
   /** Every provider an admin has manually stopped, regardless of which keys it has. */
@@ -344,16 +385,23 @@ export class Store {
     error: string | null;
     /** How many keys this request tried in total. Null under the same conditions keyId is. See Gateway.GatewayError.keysTried. */
     keyAttempts: number | null;
+    /** Gateway-assigned request id — ties a ledger row to the X-Request-Id header the caller received. */
+    requestId?: string | null;
+    /** Wall-clock milliseconds from the moment the router received the request to the moment it sent the response. */
+    latencyMs?: number | null;
+    /** The gateway's own error code (upstream_error, rate_limited, etc.) — null on success. */
+    errorCode?: string | null;
   }): Promise<void> {
     const at = now();
     await this.db.batch([
       this.db
         .prepare(
-          `INSERT INTO usage (at, client, model, key_masked, provider, key_id, input_tokens, output_tokens, ok, error, key_attempts)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO usage (at, client, model, key_masked, provider, key_id, input_tokens, output_tokens, ok, error, key_attempts, request_id, latency_ms, error_code)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(at, entry.client, entry.model, entry.keyMasked, entry.provider, entry.keyId,
-              entry.inputTokens, entry.outputTokens, entry.ok ? 1 : 0, entry.error, entry.keyAttempts),
+              entry.inputTokens, entry.outputTokens, entry.ok ? 1 : 0, entry.error, entry.keyAttempts,
+              entry.requestId ?? null, entry.latencyMs ?? null, entry.errorCode ?? null),
       this.db
         .prepare("UPDATE clients SET calls = calls + 1, last_seen = ? WHERE name = ?")
         .bind(at, entry.client),
@@ -423,6 +471,43 @@ export class Store {
       byClient: byClient ?? [],
       byProvider: byProvider ?? [],
       byKey: byKey ?? [],
+    };
+  }
+
+  /** Latency percentiles from the trailing `hours` window — p50, p95, p99, and the raw values for charting. */
+  async latencyPercentiles(hours: number): Promise<{
+    p50: number | null; p95: number | null; p99: number | null; count: number;
+    recent: { at: string; latencyMs: number; ok: boolean; provider: string | null }[];
+  }> {
+    const since = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const { results } = await this.db
+      .prepare(
+        `SELECT latency_ms FROM usage
+          WHERE at >= ? AND latency_ms IS NOT NULL
+          ORDER BY latency_ms`,
+      )
+      .bind(since)
+      .all<{ latency_ms: number }>();
+    const values = (results ?? []).map((r) => r.latency_ms);
+    const pct = (p: number) => values.length ? values[Math.min(Math.floor(values.length * p), values.length - 1)]! : null;
+
+    const { results: recentRows } = await this.db
+      .prepare(
+        `SELECT at, latency_ms, ok, provider FROM usage
+          WHERE at >= ? AND latency_ms IS NOT NULL
+          ORDER BY at DESC LIMIT 50`,
+      )
+      .bind(since)
+      .all<{ at: string; latency_ms: number; ok: number; provider: string | null }>();
+
+    return {
+      p50: pct(0.5),
+      p95: pct(0.95),
+      p99: pct(0.99),
+      count: values.length,
+      recent: (recentRows ?? []).map((r) => ({
+        at: r.at, latencyMs: r.latency_ms, ok: r.ok === 1, provider: r.provider,
+      })),
     };
   }
 

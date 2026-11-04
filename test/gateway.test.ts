@@ -1160,6 +1160,117 @@ const streamRetryRow = (await storeS.usage(20)).find((r: any) => r.key_attempts 
 check("a streamed, retry-rescued success also records key_attempts: 2",
   !!streamRetryRow && streamRetryRow.ok === 1, streamRetryRow);
 
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n── monitoring: request IDs, latency, rate-limit snapshots, finish_reason ──");
+
+const dbM = makeD1(schema);
+const storeM = new Store(dbM);
+const gatewayM = new Gateway(storeM, { defaultModel: "stub/default", upstreamUrl, timeoutMs: 5000 });
+const depsM = withWaitUntil({ store: storeM, gateway: gatewayM, adminToken: "admin-t0ken" });
+const reqM = reqFor(depsM);
+
+await reqM("POST", "/v1/keys", { keys: `${keyOf("mon1")}\n${keyOf("mon2")}` });
+const issuedM = await reqM("POST", "/v1/clients", { name: "monitor-test" });
+
+// A normal call that returns rate-limit headers alongside the 200 response.
+seen.length = 0;
+script = [{
+  status: 200,
+  body: {
+    model: "stub/model-a",
+    usage: { prompt_tokens: 10, completion_tokens: 20 },
+    choices: [{ message: { content: "hello" }, finish_reason: "length" }],
+  },
+  headers: {
+    "x-ratelimit-limit-requests": "100",
+    "x-ratelimit-remaining-requests": "42",
+    "x-ratelimit-reset-requests": new Date(Date.now() + 60_000).toISOString(),
+  },
+}];
+const monResp = await reqM("POST", "/v1/chat/completions",
+  { messages: [{ role: "user", content: "hi" }] }, issuedM.body.token);
+
+// Request ID
+check("the response carries a gateway request ID starting with gw-",
+  typeof monResp.body.id === "string" && monResp.body.id.startsWith("gw-"), monResp.body.id);
+check("x_gateway includes the request_id",
+  monResp.body.x_gateway?.request_id === monResp.body.id, monResp.body.x_gateway);
+
+// Latency
+check("x_gateway includes latency_ms as a number",
+  typeof monResp.body.x_gateway?.latency_ms === "number" && monResp.body.x_gateway.latency_ms >= 0,
+  monResp.body.x_gateway);
+
+// finish_reason passthrough
+check("finish_reason is passed through from upstream, not hardcoded to stop",
+  monResp.body.choices?.[0]?.finish_reason === "length", monResp.body.choices?.[0]);
+
+// Rate-limit snapshot was captured
+const monKeys = await reqM("GET", "/v1/keys");
+const keyWithSnapshot = monKeys.body.queue.find((k: any) => k.rateLimitLimit !== null);
+check("rate-limit snapshot is captured from 200 response headers",
+  keyWithSnapshot?.rateLimitLimit === 100 && keyWithSnapshot?.rateLimitRemaining === 42,
+  keyWithSnapshot);
+check("rate_limit_observed_at is set",
+  typeof keyWithSnapshot?.rateLimitObservedAt === "string" && keyWithSnapshot.rateLimitObservedAt.length > 0,
+  keyWithSnapshot?.rateLimitObservedAt);
+
+// Usage row carries the request ID and latency
+const monUsage = await storeM.usage(5);
+const monRow = monUsage[0];
+check("usage row carries the request_id",
+  typeof monRow?.request_id === "string" && monRow.request_id.startsWith("gw-"), monRow?.request_id);
+check("usage row carries latency_ms",
+  typeof monRow?.latency_ms === "number" && monRow.latency_ms >= 0, monRow?.latency_ms);
+
+// /v1/latency endpoint
+const latencyResp = await reqM("GET", "/v1/latency");
+check("/v1/latency returns p50/p95/p99 and count",
+  latencyResp.status === 200 && latencyResp.body.count >= 1 &&
+  latencyResp.body.p50 !== undefined && latencyResp.body.p95 !== undefined && latencyResp.body.p99 !== undefined,
+  latencyResp.body);
+check("/v1/latency includes recent array",
+  Array.isArray(latencyResp.body.recent) && latencyResp.body.recent.length >= 1, latencyResp.body.recent?.length);
+
+// /v1/latency needs admin token
+const latencyUnauth = await reqM("GET", "/v1/latency", undefined, "wrong-token");
+check("/v1/latency needs the admin token",
+  latencyUnauth.status === 401, latencyUnauth.status);
+
+// A second call with no rate-limit headers — the first key's snapshot survives
+seen.length = 0;
+script = [say("world")];
+await reqM("POST", "/v1/chat/completions",
+  { messages: [{ role: "user", content: "there" }] }, issuedM.body.token);
+const monKeys2 = await reqM("GET", "/v1/keys");
+// The second call used mon2 (rotation), which has no headers → its snapshot stays null
+// But mon1's snapshot from the first call is still intact
+const keyStillSnapped = monKeys2.body.queue.find((k: any) => k.rateLimitLimit === 100);
+check("a key's rate-limit snapshot survives calls that use other keys",
+  !!keyStillSnapped, monKeys2.body.queue.map((k: any) => ({ m: k.masked, rl: k.rateLimitLimit })));
+
+// Error recording — a failure records error_code in usage
+seen.length = 0;
+script = [{ status: 500, body: { error: { message: "test failure" } } },
+          { status: 500, body: { error: { message: "test failure 2" } } }];
+await reqM("POST", "/v1/chat/completions",
+  { messages: [{ role: "user", content: "fail" }] }, issuedM.body.token);
+const monUsage2 = await storeM.usage(10);
+const failRow = monUsage2.find((r: any) => r.ok === 0);
+check("a failed request records error_code in the usage row",
+  typeof failRow?.error_code === "string" && failRow.error_code.length > 0, failRow?.error_code);
+
+// /monitor route serves the admin page (use handle() directly — reqFor parses JSON)
+check("the monitor page is the same document, served at /monitor", await (async () => {
+  const a = await handle(new Request("http://x/"), depsM);
+  const b = await handle(new Request("http://x/monitor"), depsM);
+  return b.status === 200 && (await b.text()) === (await a.text());
+})());
+
+// 500 handler no longer leaks raw error messages
+check("the 500 handler uses a generic message, not the raw error",
+  !monResp.raw.includes("__KEY__"), "key would have been in the response");
+
 stub.close();
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- all-benched fallback in Gateway.chat — an admin's explicit call is
     -- respected until they clear it themselves.
     paused_at            TEXT,
+    -- Rate-limit snapshot from the provider's response headers. These are
+    -- observed values, not guessed quotas — the UI reads them and says "not
+    -- reported by provider" when they are null. Updated on every call that
+    -- returns x-ratelimit-* headers. See Gateway.parseRateLimitHeaders.
+    rate_limit_limit     INTEGER,
+    rate_limit_remaining INTEGER,
+    rate_limit_reset     TEXT,
+    rate_limit_observed_at TEXT,
     created_at           TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS api_keys_position ON api_keys (position, id);
@@ -95,6 +103,12 @@ CREATE TABLE IF NOT EXISTS usage (
     -- Store.retryStats() compare first-attempt vs. post-retry success
     -- honestly, from this column alone. Not the same thing as the
     -- unrelated Completion.attempts (the /v1/json salvage-retry count).
-    key_attempts  INTEGER
+    key_attempts  INTEGER,
+    -- Gateway request id, total latency and the gateway's own error code —
+    -- see migrations/0007 for the reasoning.
+    request_id    TEXT,
+    latency_ms    INTEGER,
+    error_code    TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_at ON usage (at DESC);
+CREATE INDEX IF NOT EXISTS usage_request_id ON usage (request_id);

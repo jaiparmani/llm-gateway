@@ -1,4 +1,4 @@
-import { Gateway, GatewayError, type Message } from "./gateway.ts";
+import { Gateway, GatewayError, generateRequestId, type Message } from "./gateway.ts";
 import { chatMessages, insightsMessages, parseHistory, parseInsightsResult } from "./insights.ts";
 import { intentMessages, parseIntentOptions, resolveIntent } from "./intent.ts";
 import { isKnownProvider, PROVIDERS, providerOf } from "./providers.ts";
@@ -63,7 +63,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
   // One file, three pages: the console, the chat, and insights. All the same
   // document, which picks its tab from the path, so there is still only one
   // asset to ship.
-  if ((path === "/" || path === "/chat" || path === "/insights") && method === "GET") {
+  if ((path === "/" || path === "/monitor" || path === "/chat" || path === "/insights") && method === "GET") {
     return new Response(ADMIN_HTML, {
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -89,6 +89,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       if (!messages) {
         return json({ error: { code: "validation_failed", message: "`messages` must be a non-empty array of {role, content}." } }, 400);
       }
+      const requestId = generateRequestId();
+      const startMs = Date.now();
 
       try {
         if (path === "/v1/json") {
@@ -102,32 +104,30 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
             model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
             inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
             keyAttempts: completion.keysTried.length,
+            requestId, latencyMs: Date.now() - startMs,
           });
           return json({
             data,
             model: completion.model,
             attempts: completion.attempts,
             usage: { input_tokens: completion.inputTokens, output_tokens: completion.outputTokens },
-            x_gateway: { key: completion.keyMasked },
+            x_gateway: { key: completion.keyMasked, request_id: requestId },
           });
         }
 
-        // Streaming only ever applies to /v1/chat/completions — /v1/json needs
-        // the complete text to run its salvage/retry, so it can't stream.
         if (body.stream === true) {
           const streamResult = await deps.gateway.chatStream(messages, {
             model: body.model,
             maxTokens: body.max_tokens,
             jsonObject: body.response_format?.type === "json_object",
+            requestId,
           });
-          // The usage-ledger write only becomes possible once the stream
-          // itself ends — long after this Response has already gone out —
-          // so it rides on waitUntil rather than being awaited here.
           deps.waitUntil(streamResult.outcome.then((o) =>
             record(deps, client, {
               model: o.model, keyMasked: streamResult.keyMasked, keyId: streamResult.keyId, provider: streamResult.provider,
               inputTokens: o.inputTokens, outputTokens: o.outputTokens, ok: o.ok, error: o.error,
               keyAttempts: streamResult.keysTried.length,
+              requestId, latencyMs: Date.now() - startMs, errorCode: o.ok ? null : "stream_error",
             }),
           ));
           return new Response(streamResult.body, {
@@ -136,6 +136,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
               "content-type": "text/event-stream; charset=utf-8",
               "cache-control": "no-cache",
               "connection": "keep-alive",
+              "x-request-id": requestId,
             },
           });
         }
@@ -144,44 +145,38 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           model: body.model,
           maxTokens: body.max_tokens,
           jsonObject: body.response_format?.type === "json_object",
+          requestId,
         });
+        const latencyMs = Date.now() - startMs;
         await record(deps, client, {
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
           keyAttempts: completion.keysTried.length,
+          requestId, latencyMs,
         });
         return json({
-          id: `gw-${Date.now().toString(16)}`,
+          id: requestId,
           object: "chat.completion",
           created: Math.floor(Date.now() / 1000),
           model: completion.model,
-          choices: [{ index: 0, message: { role: "assistant", content: completion.content }, finish_reason: "stop" }],
+          choices: [{ index: 0, message: { role: "assistant", content: completion.content }, finish_reason: completion.finishReason }],
           usage: {
             prompt_tokens: completion.inputTokens ?? 0,
             completion_tokens: completion.outputTokens ?? 0,
             total_tokens: (completion.inputTokens ?? 0) + (completion.outputTokens ?? 0),
           },
-          // Additive; a strict OpenAI client ignores it, and it is the only way
-          // to see which key served a call.
-          x_gateway: { key: completion.keyMasked, keys_tried: completion.keysTried },
+          x_gateway: { key: completion.keyMasked, keys_tried: completion.keysTried, request_id: requestId, latency_ms: latencyMs },
         });
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, client, {
-            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
-            inputTokens: null, outputTokens: null, ok: false, error: e.message,
-            keyAttempts: e.keysTried.length || null,
-          });
-          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+          await recordGatewayError(deps, client, e, requestId, Date.now() - startMs);
+          return jsonWithRequestId({ error: { code: e.code, message: e.message, ...e.extra } }, e.status, requestId);
         }
         throw e;
       }
     }
 
     // ── intent classification ──────────────────────────────────────────────
-    // Which of the caller's own destinations a message belongs to. Reuses the
-    // same salvage/retry machinery as /v1/json; this repo has no idea what a
-    // destination *is*, only what the caller told it (see intent.ts).
     if (path === "/v1/intent" && method === "POST") {
       const client = await deps.store.authenticate(bearer);
       if (!client) {
@@ -197,6 +192,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           400,
         );
       }
+      const requestId = generateRequestId();
+      const startMs = Date.now();
 
       try {
         const { data, completion } = await deps.gateway.json(intentMessages(message, options), { expectKey: "id" });
@@ -205,25 +202,19 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           model: completion.model, keyMasked: completion.keyMasked, keyId: completion.keyId, provider: completion.provider,
           inputTokens: completion.inputTokens, outputTokens: completion.outputTokens, ok: true, error: null,
           keyAttempts: completion.keysTried.length,
+          requestId, latencyMs: Date.now() - startMs,
         });
         return json(result);
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, client, {
-            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
-            inputTokens: null, outputTokens: null, ok: false, error: e.message,
-            keyAttempts: e.keysTried.length || null,
-          });
-          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+          await recordGatewayError(deps, client, e, requestId, Date.now() - startMs);
+          return jsonWithRequestId({ error: { code: e.code, message: e.message, ...e.extra } }, e.status, requestId);
         }
         throw e;
       }
     }
 
-    // OpenAI-compatible embeddings — the one endpoint here that is not a chat
-    // completion. Only reaches a provider whose key supports it (see
-    // ProviderDef.embeddings); with none configured this 503s the same way
-    // chat does with no keys at all.
+    // OpenAI-compatible embeddings.
     if (path === "/v1/embeddings" && method === "POST") {
       const client = await deps.store.authenticate(bearer);
       if (!client) {
@@ -237,29 +228,28 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
           400,
         );
       }
+      const requestId = generateRequestId();
+      const startMs = Date.now();
 
       try {
-        const result = await deps.gateway.embed(inputs, { model: body.model });
+        const result = await deps.gateway.embed(inputs, { model: body.model, requestId });
         await record(deps, client, {
           model: result.model, keyMasked: result.keyMasked, keyId: result.keyId, provider: result.provider,
           inputTokens: result.inputTokens, outputTokens: null, ok: true, error: null,
           keyAttempts: result.keysTried.length,
+          requestId, latencyMs: Date.now() - startMs,
         });
         return json({
           object: "list",
           data: result.embeddings.map((embedding, index) => ({ object: "embedding", embedding, index })),
           model: result.model,
           usage: { prompt_tokens: result.inputTokens ?? 0, total_tokens: result.inputTokens ?? 0 },
-          x_gateway: { key: result.keyMasked, keys_tried: result.keysTried },
+          x_gateway: { key: result.keyMasked, keys_tried: result.keysTried, request_id: requestId },
         });
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, client, {
-            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
-            inputTokens: null, outputTokens: null, ok: false, error: e.message,
-            keyAttempts: e.keysTried.length || null,
-          });
-          return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
+          await recordGatewayError(deps, client, e, requestId, Date.now() - startMs);
+          return jsonWithRequestId({ error: { code: e.code, message: e.message, ...e.extra } }, e.status, requestId);
         }
         throw e;
       }
@@ -269,7 +259,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     if (
       path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
       path === "/v1/usage" || path === "/v1/models" ||
-      path === "/v1/limits" || path === "/v1/reliability" || path.startsWith("/v1/insights") ||
+      path === "/v1/limits" || path === "/v1/latency" || path === "/v1/reliability" || path.startsWith("/v1/insights") ||
       /^\/v1\/providers\/[^/]+\/(pause|resume)$/.test(path)
     ) {
       if (!deps.adminToken) {
@@ -440,6 +430,11 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     // The gateway reasoning about its own ledger — on demand only, so it
     // never spends a rotation call the admin didn't ask for. Both routes
     // below share the same snapshot; see insights.ts for the prompts.
+    // Latency percentiles for the monitoring UI.
+    if (path === "/v1/latency" && method === "GET") {
+      return json(await deps.store.latencyPercentiles(24));
+    }
+
     if (path === "/v1/insights" && method === "POST") {
       const context = await insightsContext(deps);
       try {
@@ -453,11 +448,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         return json({ ...result, model: completion.model, key: completion.keyMasked, generatedAt: context.generatedAt });
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, "gateway:insights", {
-            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
-            inputTokens: null, outputTokens: null, ok: false, error: e.message,
-            keyAttempts: e.keysTried.length || null,
-          });
+          await recordGatewayError(deps, "gateway:insights", e);
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
         throw e;
@@ -486,11 +477,7 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         return json({ answer: completion.content, model: completion.model, key: completion.keyMasked });
       } catch (e) {
         if (e instanceof GatewayError) {
-          await record(deps, "gateway:chat-insights", {
-            model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
-            inputTokens: null, outputTokens: null, ok: false, error: e.message,
-            keyAttempts: e.keysTried.length || null,
-          });
+          await recordGatewayError(deps, "gateway:chat-insights", e);
           return json({ error: { code: e.code, message: e.message, ...e.extra } }, e.status);
         }
         throw e;
@@ -502,7 +489,9 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     if (e instanceof SyntaxError) {
       return json({ error: { code: "bad_json", message: e.message } }, 400);
     }
-    return json({ error: { code: "internal", message: (e as Error).message } }, 500);
+    // Never leak raw Error.message — it can contain stack traces, file paths,
+    // or (via a provider error class that was not caught above) a key.
+    return json({ error: { code: "internal", message: "An unexpected error occurred." } }, 500);
   }
 }
 
@@ -516,12 +505,40 @@ async function record(deps: RouterDeps, client: string, entry: {
   ok: boolean;
   error: string | null;
   keyAttempts: number | null;
+  requestId?: string | null;
+  latencyMs?: number | null;
+  errorCode?: string | null;
 }) {
   try {
     await deps.store.record({ client, ...entry });
   } catch {
     // Accounting must never be the reason an answer does not reach the caller.
   }
+}
+
+/** Shared error-recording path for every GatewayError caught in an inference endpoint. */
+async function recordGatewayError(
+  deps: RouterDeps,
+  client: string,
+  e: GatewayError,
+  requestId?: string,
+  latencyMs?: number,
+) {
+  await record(deps, client, {
+    model: null, keyMasked: e.keyMasked, keyId: e.keyId, provider: e.provider,
+    inputTokens: null, outputTokens: null, ok: false, error: e.message,
+    keyAttempts: e.keysTried.length || null,
+    requestId: requestId ?? (e.requestId || null),
+    latencyMs: latencyMs ?? null,
+    errorCode: e.code,
+  });
+}
+
+function jsonWithRequestId(data: unknown, status: number, requestId: string): Response {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...CORS, "x-request-id": requestId },
+  });
 }
 
 /**
