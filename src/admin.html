@@ -4,193 +4,181 @@
 <meta name="color-scheme" content="dark">
 <title>llm-gateway</title>
 <style>
-  :root {
-    --bg:#08090c; --panel:#12141b; --panel-2:#171a23; --stroke:rgba(255,255,255,.08);
-    --stroke-2:rgba(255,255,255,.15); --text:#e8eaf0; --text-2:#9297a6; --text-3:#626879;
-    --accent:#5ee0c8; --accent-dim:rgba(94,224,200,.14); --amber:#f5b944; --rose:#fb7185;
-    --good:#4ade80; --r:12px;
+  :root{
+    --bg:#0a0b0e;--surface:#111318;--surface-2:#16181f;--border:rgba(255,255,255,.06);
+    --text:#d4d7e0;--text-2:#7c8294;--text-3:#4e5364;
+    --accent:#5ee0c8;--accent-dim:rgba(94,224,200,.1);
+    --amber:#e9a830;--rose:#ef5f7b;--good:#4ade80;
     --mono:ui-monospace,"SF Mono",Menlo,monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --sans:system-ui,-apple-system,sans-serif;
   }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:400 14.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
-  button,input,textarea{font:inherit;color:inherit}
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--text);font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased}
+  button,input,textarea,select{font:inherit;color:inherit}
   button{cursor:pointer;border:none;background:none}
-  code{font-family:var(--mono);font-size:.92em}
-  .wrap{max-width:860px;margin:0 auto;padding:44px 24px 90px}
-  h1{margin:0;font:680 25px/1.2 var(--sans);letter-spacing:-.018em}
-  .sub{margin:5px 0 22px;color:var(--text-2);font-size:13.5px}
-  .card{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;padding:22px;margin-bottom:14px}
-  .eyebrow{font:600 10.5px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin:0 0 14px}
-  .inp{width:100%;padding:10px 13px;border-radius:var(--r);background:#0d0f14;border:1px solid var(--stroke);color:var(--text);outline:none}
-  .inp:focus{border-color:rgba(94,224,200,.5);box-shadow:0 0 0 3px var(--accent-dim)}
-  textarea.inp{font-family:var(--mono);font-size:12.5px;resize:vertical}
-  .btn{padding:8px 15px;border-radius:9px;background:rgba(255,255,255,.06);border:1px solid var(--stroke-2);font-size:13px;font-weight:500}
+  code{font:inherit;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:4px}
+  a{color:var(--accent);text-decoration:none}
+
+  .wrap{max-width:820px;margin:0 auto;padding:32px 16px 80px}
+  @media(min-width:600px){.wrap{padding:36px 24px 80px}}
+
+  header{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+  header h1{font:600 16px/1 var(--sans);letter-spacing:-.02em;color:var(--accent)}
+  header .note{color:var(--text-3);font-size:11px;flex:1}
+
+  .nav{display:flex;gap:1px;margin:0 0 20px;background:var(--border);border-radius:8px;overflow:hidden}
+  .nav button{flex:1;padding:7px 0;font:500 12px var(--sans);color:var(--text-3);background:var(--surface);transition:color .1s,background .1s}
+  .nav button:hover{color:var(--text-2)}
+  .nav button[aria-current]{color:var(--accent);background:var(--surface-2)}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px}
+  .label{font:600 9px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
+  .hint{color:var(--text-3);font-size:11px;margin-bottom:10px}
+
+  .inp{width:100%;padding:7px 10px;border-radius:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);outline:none;font:12px var(--mono)}
+  .inp:focus{border-color:rgba(94,224,200,.35)}
+  .inp::placeholder{color:var(--text-3)}
+  textarea.inp{resize:vertical}
+  select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='%234e5364'%3E%3Cpath d='M0 0l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:26px}
+
+  .btn{padding:5px 12px;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border);font:500 11px var(--sans);transition:background .1s}
   .btn:hover{background:rgba(255,255,255,.1)}
-  .btn.primary{background:var(--accent);color:#04120f;border-color:transparent;font-weight:600}
-  .btn.primary:hover{background:#7aeed9}
-  .btn.danger{color:var(--rose);border-color:rgba(251,113,133,.3)}
-  .btn.small{font-size:11.5px;padding:5px 10px}
-  .btn:disabled{opacity:.45;cursor:not-allowed}
-  .row{display:flex;gap:10px;align-items:center}
+  .btn.primary{background:var(--accent);color:#061210;border-color:transparent;font-weight:600}
+  .btn.primary:hover{background:#74ebd5}
+  .btn.danger{color:var(--rose);border-color:rgba(239,95,123,.2)}
+  .btn.danger:hover{background:rgba(239,95,123,.06)}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+
+  .row{display:flex;gap:8px;align-items:center}
   .grow{flex:1;min-width:0}
-  .dim{color:var(--text-3);font-size:11.5px}
-  .muted{color:var(--text-2);font-size:13px}
-  .item{display:flex;gap:14px;align-items:center;padding:13px 15px;background:var(--panel-2);border:1px solid var(--stroke);border-radius:var(--r);margin-top:9px}
-  .item b{font-family:var(--mono);font-size:13px;font-weight:500}
-  .tag{font:600 9.5px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:4px 7px;border-radius:5px;background:var(--accent-dim);color:var(--accent)}
-  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px}
-  .grid .k{font:600 10px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
-  .grid .v{font:600 20px/1.3 var(--mono);margin-top:7px}
-  .gate{max-width:340px;margin:12vh auto;text-align:center}
-  .err{color:var(--rose);font-size:12.5px;min-height:18px;margin-top:9px}
-  .ok{color:var(--good)}
-  .warn{color:var(--amber)}
-  .bad{color:var(--rose)}
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th{text-align:left;font:600 10px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:0 0 9px}
-  td{padding:7px 0;border-top:1px solid var(--stroke);font-family:var(--mono);font-size:12px}
-  .nav{display:flex;gap:2px;align-items:center;margin:0 0 20px;border-bottom:1px solid var(--stroke)}
-  .nav button{padding:9px 14px;font-size:13.5px;font-weight:500;color:var(--text-2);border-bottom:2px solid transparent;margin-bottom:-1px}
-  .nav button:hover{color:var(--text)}
-  .nav button[aria-current]{color:var(--text);border-bottom-color:var(--accent)}
-  .probe{margin-top:5px;font-size:11.5px}
-  .turn{margin-top:16px}
-  .turn:first-child{margin-top:0}
-  .who{font:600 10px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px}
-  .bubble{background:var(--panel-2);border:1px solid var(--stroke);border-radius:var(--r);padding:12px 15px;white-space:pre-wrap;overflow-wrap:anywhere}
-  .turn.you .bubble{background:#0d0f14}
-  .turn.trouble .bubble{border-color:rgba(251,113,133,.28);color:var(--text-2)}
-  .turn .meta{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 12px}
-  .bars{display:flex;flex-direction:column;gap:10px}
-  .bar-row{display:flex;align-items:center;gap:12px}
-  .bar-label{width:110px;flex-shrink:0;font-size:12.5px;color:var(--text-2)}
-  .bar-track{flex:1;height:10px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden}
-  .bar-fill{height:100%;border-radius:6px}
-  .bar-value{width:58px;flex-shrink:0;text-align:right;font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+  .dim{color:var(--text-3);font-size:10px}
+  .ok{color:var(--good)}.warn{color:var(--amber)}.bad{color:var(--rose)}
+  .err{color:var(--rose);font-size:11px;min-height:16px;margin-top:6px}
+
+  .item{display:flex;gap:10px;align-items:center;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;margin-top:6px;font-size:12px}
+  .item:hover{border-color:rgba(255,255,255,.1)}
+  .item b{font-weight:500}
+  .tag{font:600 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:3px 6px;border-radius:4px;background:var(--accent-dim);color:var(--accent)}
+
+  .num{font-variant-numeric:tabular-nums}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:12px}
+  .grid .k{font:500 8px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+  .grid .v{font:600 18px/1.3 var(--mono);margin-top:4px}
+
+  .gate{max-width:300px;margin:15vh auto;text-align:center}
+
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;font:500 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:0 8px 6px 0}
+  td{padding:5px 8px 5px 0;border-top:1px solid var(--border)}
+  tr:hover td{background:rgba(255,255,255,.02)}
+
+  .bars{display:flex;flex-direction:column;gap:8px}
+  .bar-row{display:flex;align-items:center;gap:10px}
+  .bar-label{width:100px;flex-shrink:0;font-size:11px;color:var(--text-2)}
+  .bar-track{flex:1;height:6px;border-radius:4px;background:rgba(255,255,255,.05);overflow:hidden}
+  .bar-fill{height:100%;border-radius:4px;transition:width .3s}
+  .bar-value{width:50px;flex-shrink:0;text-align:right;font-size:12px}
+
+  .probe{margin-top:4px;font-size:10px}
+
+  .turn{margin-top:14px}.turn:first-child{margin-top:0}
+  .who{font:500 8px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:4px}
+  .bubble{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;font-family:var(--sans)}
+  .turn.you .bubble{background:rgba(94,224,200,.04);border-color:rgba(94,224,200,.1)}
+  .turn.trouble .bubble{border-color:rgba(239,95,123,.2);color:var(--text-2)}
+  .turn .meta{margin-top:4px;display:flex;flex-wrap:wrap;gap:3px 10px;font-size:10px}
+
   [hidden]{display:none!important}
 
-  /* ── monitor tab ────────────────────────────────────────────────────── */
-  .health-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
-  .health-dot.green{background:var(--good)}
-  .health-dot.amber{background:var(--amber)}
-  .health-dot.red{background:var(--rose)}
-  .countdown{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--amber)}
-  .freshness{font-size:10.5px;color:var(--text-3)}
-  .latency-bar{display:flex;align-items:center;gap:10px;margin-top:8px}
-  .latency-bar .label{width:36px;flex-shrink:0;font:600 10.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--text-3)}
-  .latency-bar .track{flex:1;height:8px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden;position:relative}
-  .latency-bar .fill{height:100%;border-radius:4px;transition:width .3s ease}
-  .latency-bar .ms{width:60px;flex-shrink:0;text-align:right;font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
-  .refresh-row{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-bottom:14px}
-  .refresh-row .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  .spark{display:inline-flex;gap:1px;align-items:flex-end;height:20px;vertical-align:middle}
-  .spark i{display:block;width:3px;min-height:1px;border-radius:1px;background:var(--accent);opacity:.7}
-  .error-row{padding:8px 12px;margin-top:6px;background:rgba(251,113,133,.06);border:1px solid rgba(251,113,133,.15);border-radius:8px;font-size:12px}
-  .error-row .er-time{color:var(--text-3);font-family:var(--mono);font-size:11px;margin-right:8px}
-  .error-row .er-code{color:var(--rose);font-family:var(--mono)}
-  .error-row .er-key{color:var(--text-2);margin-left:8px}
+  .health-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .health-dot.green{background:var(--good)}.health-dot.amber{background:var(--amber)}.health-dot.red{background:var(--rose)}
+  .countdown{font-variant-numeric:tabular-nums;color:var(--amber);font-size:11px}
+  .freshness{font-size:9px;color:var(--text-3)}
+  .latency-bar{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .latency-bar .lb{width:28px;flex-shrink:0;font:500 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+  .latency-bar .track{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.04);overflow:hidden}
+  .latency-bar .fill{height:100%;border-radius:3px;transition:width .3s}
+  .latency-bar .ms{width:55px;flex-shrink:0;text-align:right;font-size:11px}
+  .refresh-row{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-bottom:12px;font-size:10px}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .spark{display:inline-flex;gap:1px;align-items:flex-end;height:18px;vertical-align:middle}
+  .spark i{display:block;width:2px;min-height:1px;border-radius:1px;background:var(--accent);opacity:.6}
+  .error-row{padding:6px 10px;margin-top:4px;background:rgba(239,95,123,.04);border:1px solid rgba(239,95,123,.1);border-radius:6px;font-size:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .error-row .er-time{color:var(--text-3)}.error-row .er-code{color:var(--rose)}.error-row .er-key{color:var(--text-2)}
+  .sec{font-size:10px;color:var(--text-3);margin:14px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--border)}
 </style>
 
 <div class="wrap">
-  <div class="row" style="align-items:flex-start">
-    <div class="grow">
-      <h1>llm-gateway</h1>
-      <p class="sub" id="note">One place for the provider keys. Everything else points here.</p>
-    </div>
-    <button class="btn" id="lock" hidden>Lock</button>
-  </div>
+  <header>
+    <h1>llm-gateway</h1>
+    <span class="note" id="note"></span>
+    <button class="btn" id="lock" hidden style="font-size:10px">Lock</button>
+  </header>
 
   <nav class="nav">
-    <button data-view="console">Console</button>
+    <button data-view="console">Keys</button>
     <button data-view="monitor">Monitor</button>
     <button data-view="chat">Chat</button>
     <button data-view="insights">Insights</button>
   </nav>
 
-  <!-- ── console ─────────────────────────────────────────────────────────── -->
+  <!-- ── keys ────────────────────────────────────────────────────────────── -->
   <div id="view-console" hidden>
     <div id="gate" hidden>
       <div class="gate">
-        <p class="muted" style="margin:0 0 12px">Unlock with the admin token to manage keys and clients.</p>
-        <input id="tok" class="inp" type="password" placeholder="Admin token" autocomplete="off">
+        <p class="hint" style="margin-bottom:10px">Admin token required.</p>
+        <input id="tok" class="inp" type="password" placeholder="Token" autocomplete="off">
         <div class="err" id="gateErr"></div>
         <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
       </div>
     </div>
-
     <div id="app" hidden>
       <div class="card">
-        <p class="eyebrow">Add keys</p>
-        <p class="muted" style="margin:0 0 13px">
-          Paste one or more keys for a single provider below — newlines, commas or spaces between them.
-          Each call takes the key at the front of the queue and sends it to the back, so several keys —
-          from one provider or several — multiply the free tier's daily cap instead of spending one down.
-        </p>
-        <div class="row" style="margin-bottom:10px">
+        <p class="label">Add keys</p>
+        <div class="row" style="margin-bottom:6px">
           <select id="keyProvider" class="inp grow"></select>
         </div>
-        <textarea id="keyInput" class="inp" rows="4" spellcheck="false" placeholder="Paste keys here"></textarea>
-        <div class="row" style="margin-top:10px">
+        <textarea id="keyInput" class="inp" rows="3" spellcheck="false" placeholder="Paste keys here"></textarea>
+        <div class="row" style="margin-top:6px">
           <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
-          <button class="btn primary" id="save">Save keys</button>
+          <button class="btn primary" id="save">Save</button>
         </div>
-        <div id="saveOut" style="margin-top:11px"></div>
+        <div id="saveOut" style="margin-top:8px"></div>
       </div>
 
       <div class="card">
-        <p class="eyebrow">Providers</p>
-        <p class="muted" style="margin:0 0 13px">
-          Pause a provider to stop rotation from using any of its keys — present and future — without
-          touching their individual state. Unlike a benched key, a pause does not clear itself; resume it
-          by hand once you're ready.
-        </p>
+        <p class="label">Providers</p>
         <div id="providerList"></div>
       </div>
 
       <div class="card">
-        <p class="eyebrow">Default models</p>
-        <p class="muted" style="margin:0 0 13px">
-          What each provider is asked for when nothing more specific applies. Providers rename and
-          retire models — set one here to fix it immediately, no deploy. Leave blank to fall back to
-          the built-in default shown as the field's placeholder.
-        </p>
+        <p class="label">Models</p>
         <div id="models"></div>
       </div>
 
       <div class="card">
-        <p class="eyebrow">Rotation queue</p>
-        <p class="muted" style="margin:0 0 13px">
-          Test asks the provider about that one key alone, outside the rotation — a typo is worth finding
-          now rather than a week later, when every caller has quietly been served by the others.
-        </p>
+        <p class="label">Rotation queue</p>
         <div id="keys"></div>
       </div>
 
       <div class="card">
-        <p class="eyebrow">Clients</p>
-        <p class="muted" style="margin:0 0 13px">
-          Each app gets its own token, so usage is attributable and one app can be cut off without
-          touching the others. A token is shown once and stored only as a hash.
-        </p>
+        <p class="label">Clients</p>
         <div class="row">
-          <input id="clientName" class="inp grow" placeholder="brain, toolbox, …" autocomplete="off">
-          <button class="btn" id="mkClient">Issue token</button>
+          <input id="clientName" class="inp grow" placeholder="Name" autocomplete="off">
+          <button class="btn" id="mkClient">Issue</button>
         </div>
-        <div id="clientOut" style="margin-top:11px"></div>
+        <div id="clientOut" style="margin-top:8px"></div>
         <div id="clients"></div>
       </div>
 
       <div class="card">
-        <p class="eyebrow">Usage</p>
+        <p class="label">Usage</p>
         <div class="grid" id="summary"></div>
-        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <p class="sec">By provider</p>
         <div style="overflow-x:auto"><table id="byProvider"></table></div>
-        <p class="dim" style="margin:16px 0 6px">By key</p>
+        <p class="sec">By key</p>
         <div style="overflow-x:auto"><table id="byKey"></table></div>
-        <p class="dim" style="margin:16px 0 6px">Recent calls</p>
+        <p class="sec">Recent</p>
         <div style="overflow-x:auto"><table id="recent"></table></div>
       </div>
     </div>
@@ -200,53 +188,39 @@
   <div id="view-monitor" hidden>
     <div id="monitorLocked" hidden>
       <div class="card">
-        <p class="muted" style="margin:0 0 13px">
-          The monitor reads the same operational data as the Console tab — unlock with the admin
-          token there first.
-        </p>
-        <button class="btn primary" id="goUnlockMon">Go to Console</button>
+        <p class="hint">Unlock on the Keys tab first.</p>
+        <button class="btn primary" id="goUnlockMon">Go to Keys</button>
       </div>
     </div>
-
     <div id="monitorApp" hidden>
       <div class="refresh-row">
         <span class="dim" id="monAutoLabel"></span>
-        <button class="btn small" id="monRefresh">Refresh now</button>
-        <label class="dim" style="display:flex;align-items:center;gap:5px;cursor:pointer">
-          <input type="checkbox" id="monAutoToggle" checked>
-          Auto (30 s)
+        <button class="btn" id="monRefresh" style="font-size:10px;padding:3px 8px">Refresh</button>
+        <label class="dim" style="display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="monAutoToggle" checked> Auto 30s
         </label>
       </div>
-
       <div class="card">
-        <p class="eyebrow">System health</p>
+        <p class="label">Health</p>
         <div class="grid" id="monHealth"></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Latency <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— last 24 hours</span></p>
-        <div class="grid" id="monLatencyGrid" style="margin-bottom:14px"></div>
+        <p class="label">Latency <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h</span></p>
+        <div class="grid" id="monLatencyGrid" style="margin-bottom:10px"></div>
         <div id="monLatencyBars"></div>
-        <div id="monLatencySpark" style="margin-top:12px"></div>
+        <div id="monLatencySpark" style="margin-top:8px"></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Rate limits per key <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— observed from provider headers</span></p>
-        <p class="muted" style="margin:0 0 13px">
-          These are the actual values the provider sent back in its response headers. When a value is
-          null, the provider didn't report it — nothing below is a guessed cap.
-        </p>
+        <p class="label">Rate limits <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">from headers</span></p>
         <div id="monRateLimits"></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Reliability <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— last 24 hours</span></p>
+        <p class="label">Reliability <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h</span></p>
         <div class="bars" id="monReliabilityBars"></div>
-        <div class="grid" id="monReliabilitySummary" style="margin-top:18px"></div>
+        <div class="grid" id="monReliabilitySummary" style="margin-top:12px"></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Recent errors</p>
+        <p class="label">Recent errors</p>
         <div id="monErrors"></div>
       </div>
     </div>
@@ -255,41 +229,26 @@
   <!-- ── chat ────────────────────────────────────────────────────────────── -->
   <div id="view-chat" hidden>
     <div class="card" id="chatGate" hidden>
-      <p class="eyebrow">Client token</p>
-      <p class="muted" style="margin:0 0 13px">
-        This page talks to the gateway exactly the way any other app does — over
-        <code>POST /v1/chat/completions</code> with a client token, not the admin one. Issue one in the
-        Console tab; it is shown once, at issue.
-      </p>
+      <p class="label">Client token</p>
+      <p class="hint">Use a client token (not admin). Issue one on the Keys tab.</p>
       <div class="row">
         <input id="clientTok" class="inp grow" type="password" placeholder="lgw_…" autocomplete="off">
-        <button class="btn primary" id="chatUnlock">Use it</button>
+        <button class="btn primary" id="chatUnlock">Connect</button>
       </div>
       <div class="err" id="chatGateErr"></div>
     </div>
-
     <div id="chatApp" hidden>
       <div class="card">
         <div class="row">
-          <input id="model" class="inp grow" spellcheck="false" autocomplete="off"
-                 placeholder="Model — blank asks for the gateway default">
-          <button class="btn" id="newChat">New chat</button>
-          <button class="btn" id="chatLock">Forget token</button>
+          <input id="model" class="inp grow" spellcheck="false" autocomplete="off" placeholder="Model (blank = default)">
+          <button class="btn" id="newChat" style="font-size:10px">New</button>
+          <button class="btn danger" id="chatLock" style="font-size:10px">Disconnect</button>
         </div>
-        <p class="dim" style="margin:9px 0 0">
-          The default pool routes every call to a different model, so each reply says which one actually
-          answered and which key served it.
-        </p>
       </div>
-
-      <div class="card" id="logCard">
-        <div id="log"></div>
-      </div>
-
+      <div class="card" id="logCard"><div id="log"></div></div>
       <div class="card">
-        <textarea id="composer" class="inp" rows="3" spellcheck="false"
-                  placeholder="Say something. Enter sends, Shift+Enter is a newline."></textarea>
-        <div class="row" style="margin-top:10px">
+        <textarea id="composer" class="inp" rows="2" spellcheck="false" placeholder="Enter sends, Shift+Enter newline"></textarea>
+        <div class="row" style="margin-top:6px">
           <span class="dim grow" id="chatStatus"></span>
           <button class="btn primary" id="send">Send</button>
         </div>
@@ -301,65 +260,39 @@
   <div id="view-insights" hidden>
     <div id="insightsLocked" hidden>
       <div class="card">
-        <p class="muted" style="margin:0 0 13px">
-          Insights reads the same operational data as the Console tab — unlock with the admin
-          token there first.
-        </p>
-        <button class="btn primary" id="goUnlock">Go to Console</button>
+        <p class="hint">Unlock on the Keys tab first.</p>
+        <button class="btn primary" id="goUnlock">Go to Keys</button>
       </div>
     </div>
-
     <div id="insightsApp" hidden>
       <div class="card">
-        <p class="eyebrow">Limits &amp; health</p>
-        <p class="muted" style="margin:0 0 13px">
-          What's actually been observed in the last 24 hours. Providers don't reliably expose
-          what their free tier allows, so nothing below is a guessed cap — only calls made and
-          429s actually received.
-        </p>
+        <p class="label">Limits &amp; health <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h observed</span></p>
         <div class="grid" id="limitsSummary"></div>
-        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <p class="sec">By provider</p>
         <div style="overflow-x:auto"><table id="limitsByProvider"></table></div>
-        <p class="dim" style="margin:16px 0 6px">By key</p>
+        <p class="sec">By key</p>
         <div style="overflow-x:auto"><table id="limitsByKey"></table></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Reliability</p>
-        <p class="muted" style="margin:0 0 13px">
-          Retrying only ever follows a failure — the gateway moves to the next key the moment
-          one doesn't work. So "without retries" below isn't a simulation: it's exactly what
-          happened on the first key tried, for every call that needed more than one.
-        </p>
+        <p class="label">Reliability</p>
         <div class="bars" id="reliabilityBars"></div>
-        <div class="grid" id="reliabilitySummary" style="margin-top:18px"></div>
-        <p class="dim" style="margin:20px 0 6px">By provider</p>
+        <div class="grid" id="reliabilitySummary" style="margin-top:12px"></div>
+        <p class="sec">By provider</p>
         <div style="overflow-x:auto"><table id="reliabilityByProvider"></table></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">AI insights</p>
-        <p class="muted" style="margin:0 0 13px">
-          Spends one call from the rotation to read the data above and point out what's worth
-          noticing — only on request, never on its own.
-        </p>
-        <button class="btn primary" id="genInsights">Analyze usage</button>
-        <div id="insightsOut" style="margin-top:14px"></div>
+        <p class="label">AI analysis</p>
+        <button class="btn primary" id="genInsights">Analyze</button>
+        <div id="insightsOut" style="margin-top:10px"></div>
       </div>
-
       <div class="card">
-        <p class="eyebrow">Ask about your data</p>
-        <p class="muted" style="margin:0 0 13px">
-          Answers grounded only in the snapshot above — it says so rather than guessing at
-          anything not in it.
-        </p>
+        <p class="label">Ask about your data</p>
         <div id="dataChatLog"></div>
-        <div class="row" style="margin-top:10px">
-          <input id="dataChatInput" class="inp grow" autocomplete="off"
-                 placeholder="e.g. which provider failed the most today?">
+        <div class="row" style="margin-top:8px">
+          <input id="dataChatInput" class="inp grow" autocomplete="off" placeholder="Which provider failed the most?">
           <button class="btn primary" id="dataChatSend">Ask</button>
         </div>
-        <div class="dim" id="dataChatStatus" style="margin-top:8px"></div>
+        <div class="dim" id="dataChatStatus" style="margin-top:6px"></div>
       </div>
     </div>
   </div>
@@ -372,16 +305,30 @@
   const when = (s) => String(s ?? "").slice(0, 16).replace("T", " ");
   let token = localStorage.getItem("gw.token") || "";
 
-  // ── providers ─────────────────────────────────────────────────────────────
-  let providers = [];
-  function providerLabel(id) {
-    return providers.find((p) => p.id === id)?.label || id;
+  function ago(isoStr) {
+    const diff = Date.now() - Date.parse(isoStr);
+    if (diff < 0) return "just now";
+    if (diff < 60_000) return Math.floor(diff / 1000) + "s ago";
+    if (diff < 3_600_000) return Math.floor(diff / 60_000) + "m ago";
+    if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + "h ago";
+    return Math.floor(diff / 86_400_000) + "d ago";
   }
+  function fmtDuration(ms) {
+    if (ms <= 0) return "now";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    if (m < 60) return m + "m " + (rs ? rs + "s" : "");
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return h + "h " + (rm ? rm + "m" : "");
+  }
+
+  let providers = [];
+  function providerLabel(id) { return providers.find((p) => p.id === id)?.label || id; }
   async function loadProviders() {
-    try {
-      const r = await fetch("/v1/providers");
-      providers = (await r.json()).providers || [];
-    } catch { providers = []; }
+    try { const r = await fetch("/v1/providers"); providers = (await r.json()).providers || []; } catch { providers = []; }
     $("#keyProvider").innerHTML = providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("");
     updateKeyPlaceholder();
   }
@@ -395,53 +342,34 @@
     await loadProviders();
     $("#providerList").innerHTML = providers.map((p) => `
       <div class="item">
-        <div class="grow">
-          <b>${esc(p.label)}</b>
-          ${p.paused ? '<span class="tag" style="margin-left:7px;background:rgba(251,113,133,.14);color:var(--rose)">paused</span>' : ""}
+        <div class="grow"><b>${esc(p.label)}</b>
+          ${p.paused ? '<span class="tag" style="margin-left:6px;background:rgba(239,95,123,.1);color:var(--rose)">paused</span>' : ""}
         </div>
-        <button class="btn small" data-provider-toggle="${esc(p.id)}" data-paused="${p.paused}">${p.paused ? "Resume" : "Pause"}</button>
+        <button class="btn" data-provider-toggle="${esc(p.id)}" data-paused="${p.paused}" style="font-size:10px">${p.paused ? "Resume" : "Pause"}</button>
       </div>`).join("");
-
     document.querySelectorAll("[data-provider-toggle]").forEach((b) => (b.onclick = async () => {
-      const id = b.dataset.providerToggle;
-      const wasPaused = b.dataset.paused === "true";
+      const id = b.dataset.providerToggle, wasPaused = b.dataset.paused === "true";
       b.disabled = true;
-      try {
-        await api("/v1/providers/" + id + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" });
-        await load();
-      } catch (e) { alert(e.message); b.disabled = false; }
+      try { await api("/v1/providers/" + id + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" }); await load(); }
+      catch (e) { alert(e.message); b.disabled = false; }
     }));
   }
 
   async function api(path, options = {}) {
-    const res = await fetch(path, {
-      ...options,
-      headers: { Authorization: "Bearer " + token, ...(options.body ? {"Content-Type":"application/json"} : {}) },
-    });
+    const res = await fetch(path, { ...options, headers: { Authorization: "Bearer " + token, ...(options.body ? {"Content-Type":"application/json"} : {}) } });
     if (res.status === 401) { lock(); throw new Error("unauthorized"); }
     const text = await res.text();
     const body = text ? JSON.parse(text) : null;
-    if (!res.ok) throw new Error(
-      (Array.isArray(body?.skipped) && body.skipped.length ? body.skipped.join("; ") : null)
-      || body?.error?.message
-      || body?.detail
-      || "request failed",
-    );
+    if (!res.ok) throw new Error((Array.isArray(body?.skipped) && body.skipped.length ? body.skipped.join("; ") : null) || body?.error?.message || body?.detail || "request failed");
     return body;
   }
 
-  // ── which page ────────────────────────────────────────────────────────────
   const VIEWS = ["console", "monitor", "chat", "insights"];
   let view = "console";
   function show(next, push) {
     view = VIEWS.includes(next) ? next : "console";
-    VIEWS.forEach((v) => {
-      const el = document.getElementById("view-" + v);
-      if (el) el.hidden = v !== view;
-    });
-    document.querySelectorAll("[data-view]").forEach((b) => {
-      if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
-    });
+    VIEWS.forEach((v) => { const el = document.getElementById("view-" + v); if (el) el.hidden = v !== view; });
+    document.querySelectorAll("[data-view]").forEach((b) => { if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     const paths = { console: "/", monitor: "/monitor", chat: "/chat", insights: "/insights" };
     if (push) history.pushState({}, "", paths[view] || "/");
     if (view === "chat") drawChat();
@@ -451,11 +379,9 @@
   document.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => show(b.dataset.view, true)));
   window.onpopstate = () => {
     const p = location.pathname.replace(/\/+$/, "");
-    const v = p === "/chat" ? "chat" : p === "/insights" ? "insights" : p === "/monitor" ? "monitor" : "console";
-    show(v, false);
+    show(p === "/chat" ? "chat" : p === "/insights" ? "insights" : p === "/monitor" ? "monitor" : "console", false);
   };
 
-  // ── console ───────────────────────────────────────────────────────────────
   function lock() {
     token = ""; localStorage.removeItem("gw.token");
     $("#app").hidden = true; $("#gate").hidden = false; $("#lock").hidden = true;
@@ -471,7 +397,7 @@
       localStorage.setItem("gw.token", token);
       $("#gate").hidden = true; $("#app").hidden = false; $("#lock").hidden = false;
       await load();
-    } catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "That token was rejected." : e.message; }
+    } catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "Rejected." : e.message; }
   }
   $("#unlock").onclick = () => unlock($("#tok").value);
   $("#tok").onkeydown = (e) => { if (e.key === "Enter") unlock($("#tok").value); };
@@ -480,30 +406,19 @@
   async function drawModels() {
     const m = await api("/v1/models");
     $("#models").innerHTML = m.models.map((x) => `
-      <div class="item">
-        <div class="grow">
-          <b>${esc(x.label)}</b>
-          <div class="row" style="margin-top:7px">
-            <input class="inp grow" data-model="${esc(x.provider)}" placeholder="${esc(x.registryDefault)}" value="${esc(x.override || "")}">
-            <button class="btn small" data-model-save="${esc(x.provider)}">Save</button>
-          </div>
-          <div class="dim" style="margin-top:5px">using <code>${esc(x.effective)}</code>${x.override ? "" : " &middot; built-in default"}</div>
-          <div class="probe" data-model-out="${esc(x.provider)}" hidden></div>
+      <div class="item" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div class="row"><b>${esc(x.label)}</b><span class="dim" style="margin-left:auto">using ${esc(x.effective)}${x.override ? "" : " (default)"}</span></div>
+        <div class="row">
+          <input class="inp grow" data-model="${esc(x.provider)}" placeholder="${esc(x.registryDefault)}" value="${esc(x.override || "")}">
+          <button class="btn" data-model-save="${esc(x.provider)}" style="font-size:10px">Save</button>
         </div>
+        <div class="probe" data-model-out="${esc(x.provider)}" hidden></div>
       </div>`).join("");
-
     document.querySelectorAll("[data-model-save]").forEach((b) => (b.onclick = async () => {
-      const id = b.dataset.modelSave;
-      const input = document.querySelector('[data-model="' + id + '"]');
-      const out = document.querySelector('[data-model-out="' + id + '"]');
+      const id = b.dataset.modelSave, input = document.querySelector('[data-model="' + id + '"]'), out = document.querySelector('[data-model-out="' + id + '"]');
       b.disabled = true;
-      try {
-        await api("/v1/models", { method: "POST", body: JSON.stringify({ provider: id, model: input.value.trim() }) });
-        await drawModels();
-      } catch (e) {
-        out.hidden = false; out.className = "probe bad"; out.textContent = e.message;
-        b.disabled = false;
-      }
+      try { await api("/v1/models", { method: "POST", body: JSON.stringify({ provider: id, model: input.value.trim() }) }); await drawModels(); }
+      catch (e) { out.hidden = false; out.className = "probe bad"; out.textContent = e.message; b.disabled = false; }
     }));
   }
 
@@ -513,59 +428,54 @@
     $("#note").textContent = k.note;
     $("#keys").innerHTML = k.queue.length ? k.queue.map((x) => {
       const stillLimited = x.rateLimitedUntil && x.rateLimitedUntil > nowIso;
+      const statusColor = x.benched ? "var(--rose)" : x.paused || x.providerPaused ? "var(--rose)" : stillLimited ? "var(--amber)" : x.next ? "var(--accent)" : "var(--text-3)";
       return `
       <div class="item">
-        <span style="width:16px;text-align:center;color:${x.next ? "var(--accent)" : "var(--text-3)"}">${x.next ? "&#9654;" : "&middot;"}</span>
+        <span style="color:${statusColor}">${x.next ? "&#9654;" : "&#9679;"}</span>
         <div class="grow">
-          <b>${esc(x.masked)}</b>
-          <span class="tag" style="margin-left:7px">${esc(providerLabel(x.provider))}</span>
-          ${x.next ? '<span class="tag" style="margin-left:5px">next</span>' : ""}
-          <div class="dim" style="margin-top:3px">
-            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.totalFailures ? " &middot; " + x.totalFailures + " failure" + (x.totalFailures === 1 ? "" : "s") + " lifetime" : ""}${x.label ? " &middot; " + esc(x.label) : ""}
-            ${x.lastRateLimitedAt ? ' &middot; <span class="warn">rate limited ' + esc(x.lastRateLimitedAt.slice(0,10)) + "</span>" : ""}
-            ${stillLimited ? ' &middot; <span class="warn">limited until ' + esc(when(x.rateLimitedUntil)) + "</span>" : ""}
+          <div class="row" style="flex-wrap:wrap;gap:4px 6px">
+            <b>${esc(x.masked)}</b>
+            <span class="tag">${esc(providerLabel(x.provider))}</span>
+            ${x.next ? '<span class="tag">next</span>' : ""}
+            ${x.benched ? '<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">benched</span>' : ""}
+            ${x.paused ? '<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">paused</span>' : ""}
           </div>
-          ${x.benched ? '<div class="bad" style="margin-top:3px;font-size:11.5px">benched — skipped by rotation' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 140)) : "") + "</div>" : ""}
-          ${x.paused ? '<div class="bad" style="margin-top:3px;font-size:11.5px">paused by hand — skipped by rotation</div>' : ""}
-          ${!x.paused && x.providerPaused ? '<div class="warn" style="margin-top:3px;font-size:11.5px">its provider is paused — skipped by rotation</div>' : ""}
-          ${!x.benched && !x.paused && !x.providerPaused && stillLimited ? '<div class="warn" style="margin-top:3px;font-size:11.5px">known to still be rate limited — skipped by rotation until it resets</div>' : ""}
+          <div class="dim" style="margin-top:3px">
+            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.totalFailures ? " · " + x.totalFailures + " fail" : ""}${x.label ? " · " + esc(x.label) : ""}${x.lastRateLimitedAt ? ' · <span class="warn">limited ' + esc(ago(x.lastRateLimitedAt)) + "</span>" : ""}${stillLimited ? ' · <span class="warn countdown" data-reset="' + esc(x.rateLimitedUntil) + '">resets ' + fmtDuration(Date.parse(x.rateLimitedUntil) - Date.now()) + "</span>" : ""}
+          </div>
+          ${x.benched ? '<div class="bad" style="margin-top:2px;font-size:10px">benched' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 100)) : "") + "</div>" : ""}
+          ${!x.paused && x.providerPaused ? '<div class="warn" style="margin-top:2px;font-size:10px">provider paused</div>' : ""}
           <div class="probe" data-probe="${x.id}" hidden></div>
         </div>
-        ${x.benched ? `<button class="btn small" data-unbench="${x.id}">Un-bench</button>` : ""}
-        <button class="btn small" data-key-toggle="${x.id}" data-paused="${x.paused}">${x.paused ? "Resume" : "Pause"}</button>
-        <button class="btn small" data-test="${x.id}">Test</button>
-        <button class="btn danger small" data-del="${x.id}">Remove</button>
+        ${x.benched ? `<button class="btn" data-unbench="${x.id}" style="font-size:10px">Un-bench</button>` : ""}
+        <button class="btn" data-key-toggle="${x.id}" data-paused="${x.paused}" style="font-size:10px">${x.paused ? "Resume" : "Pause"}</button>
+        <button class="btn" data-test="${x.id}" style="font-size:10px">Test</button>
+        <button class="btn danger" data-del="${x.id}" style="font-size:10px">Del</button>
       </div>`;
-    }).join("") : `<p class="dim" style="margin:0">No keys yet. Every call will fail until you add one.</p>`;
+    }).join("") : `<p class="dim" style="padding:8px 0">No keys yet.</p>`;
 
     document.querySelectorAll("[data-key-toggle]").forEach((b) => (b.onclick = async () => {
-      const wasPaused = b.dataset.paused === "true";
-      b.disabled = true;
+      const wasPaused = b.dataset.paused === "true"; b.disabled = true;
       try { await api("/v1/keys/" + b.dataset.keyToggle + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" }); await load(); }
       catch (e) { alert(e.message); b.disabled = false; }
     }));
-
     document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
       const out = document.querySelector('[data-probe="' + b.dataset.test + '"]');
-      b.disabled = true; out.hidden = false; out.className = "probe dim"; out.textContent = "Asking the provider…";
+      b.disabled = true; out.hidden = false; out.className = "probe dim"; out.textContent = "Testing…";
       try {
         const r = await api("/v1/keys/" + b.dataset.test + "/test", { method: "POST" });
-        const tone = r.status === "live" ? "ok" : r.status === "rate_limited" ? "warn" : "bad";
-        const word = r.status === "live" ? "Live" : r.status === "rate_limited" ? "Rate limited" : "Failed";
-        out.className = "probe " + tone;
-        out.textContent = word + " — " + r.message;
-      } catch (e) { out.className = "probe bad"; out.textContent = "Could not run the test: " + e.message; }
+        out.className = "probe " + (r.status === "live" ? "ok" : r.status === "rate_limited" ? "warn" : "bad");
+        out.textContent = (r.status === "live" ? "Live" : r.status === "rate_limited" ? "Rate limited" : "Failed") + " — " + r.message;
+      } catch (e) { out.className = "probe bad"; out.textContent = e.message; }
       b.disabled = false;
     }));
-
     document.querySelectorAll("[data-unbench]").forEach((b) => (b.onclick = async () => {
       b.disabled = true;
       try { await api("/v1/keys/" + b.dataset.unbench + "/unbench", { method: "POST" }); await load(); }
       catch (e) { alert(e.message); b.disabled = false; }
     }));
-
     document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
-      if (!confirm("Remove this key from the rotation?")) return;
+      if (!confirm("Remove this key?")) return;
       try { await api("/v1/keys/" + b.dataset.del, { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
     }));
 
@@ -576,82 +486,64 @@
     $("#clients").innerHTML = c.clients.length ? c.clients.map((x) => `
       <div class="item">
         <div class="grow"><b>${esc(x.name)}</b>
-          <div class="dim" style="margin-top:3px">${x.calls} call${x.calls === 1 ? "" : "s"}${x.last_seen ? " &middot; last seen " + esc(x.last_seen.slice(0,10)) : " &middot; never used"}</div>
+          <span class="dim" style="margin-left:6px">${x.calls} call${x.calls === 1 ? "" : "s"}${x.last_seen ? " · " + ago(x.last_seen) : " · never"}</span>
         </div>
-        <button class="btn danger small" data-revoke="${esc(x.name)}">Revoke</button>
-      </div>`).join("") : `<p class="dim" style="margin:12px 0 0">No clients yet.</p>`;
-
+        <button class="btn danger" data-revoke="${esc(x.name)}" style="font-size:10px">Revoke</button>
+      </div>`).join("") : `<p class="dim" style="padding:8px 0">No clients yet.</p>`;
     document.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {
-      if (!confirm(`Revoke "${b.dataset.revoke}"? It will stop being able to call the gateway immediately.`)) return;
+      if (!confirm(`Revoke "${b.dataset.revoke}"?`)) return;
       try { await api("/v1/clients/" + encodeURIComponent(b.dataset.revoke), { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
     }));
 
-    const u = await api("/v1/usage?limit=25");
-    const s = u.summary;
+    const u = await api("/v1/usage?limit=25"), s = u.summary;
     $("#summary").innerHTML = `
       <div><div class="k">Calls</div><div class="v">${s.calls}</div></div>
-      <div><div class="k">Succeeded</div><div class="v ok">${s.ok}</div></div>
+      <div><div class="k">OK</div><div class="v ok">${s.ok}</div></div>
       <div><div class="k">Failed</div><div class="v ${s.calls - s.ok ? "warn" : ""}">${s.calls - s.ok}</div></div>
       <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
       <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
-
-    const rate = (calls, ok) => calls ? Math.round((100 * ok) / calls) + "%" : "—";
+    const rate = (c2, ok) => c2 ? Math.round((100 * ok) / c2) + "%" : "—";
     $("#byProvider").innerHTML = s.byProvider?.length
-      ? `<tr><th>Provider</th><th>Calls</th><th>Success</th><th>Tokens in</th><th>Tokens out</th></tr>` + s.byProvider.map((p) => `
-        <tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.calls}</td>
-        <td class="num">${rate(p.calls, p.ok)}</td>
-        <td class="num">${p.input_tokens.toLocaleString()}</td><td class="num">${p.output_tokens.toLocaleString()}</td></tr>`).join("")
-      : `<tr><td class="dim">Nothing yet.</td></tr>`;
+      ? `<tr><th>Provider</th><th>Calls</th><th>OK</th><th>In</th><th>Out</th></tr>` + s.byProvider.map((p) => `<tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.calls}</td><td class="num">${rate(p.calls, p.ok)}</td><td class="num">${p.input_tokens.toLocaleString()}</td><td class="num">${p.output_tokens.toLocaleString()}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
     $("#byKey").innerHTML = s.byKey?.length
-      ? `<tr><th>Key</th><th>Provider</th><th>Calls</th><th>Success</th><th>Tokens in</th><th>Tokens out</th></tr>` + s.byKey.map((k) => `
-        <tr><td>${esc(k.key_masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.calls}</td>
-        <td class="num">${rate(k.calls, k.ok)}</td>
-        <td class="num">${k.input_tokens.toLocaleString()}</td><td class="num">${k.output_tokens.toLocaleString()}</td></tr>`).join("")
-      : `<tr><td class="dim">Nothing yet.</td></tr>`;
-
+      ? `<tr><th>Key</th><th>Provider</th><th>Calls</th><th>OK</th><th>In</th><th>Out</th></tr>` + s.byKey.map((k2) => `<tr><td>${esc(k2.key_masked)}</td><td>${esc(providerLabel(k2.provider))}</td><td class="num">${k2.calls}</td><td class="num">${rate(k2.calls, k2.ok)}</td><td class="num">${k2.input_tokens.toLocaleString()}</td><td class="num">${k2.output_tokens.toLocaleString()}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
     $("#recent").innerHTML = u.recent.length
-      ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `
-        <tr><td>${esc(when(r.at))}</td><td>${esc(r.client)}</td>
-        <td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td>
-        <td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "failed").slice(0,48))}</td></tr>`).join("")
-      : `<tr><td class="dim">Nothing yet.</td></tr>`;
+      ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `<tr><td>${esc(ago(r.at))}</td><td>${esc(r.client)}</td><td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td><td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "fail").slice(0,40))}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
   }
 
   $("#keyProvider").onchange = updateKeyPlaceholder;
-
   $("#save").onclick = async () => {
     const keys = $("#keyInput").value.trim(); if (!keys) return;
     $("#save").disabled = true;
     try {
       const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim(), provider: $("#keyProvider").value }) });
       $("#keyInput").value = ""; $("#keyLabel").value = "";
-      $("#saveOut").innerHTML = `<span class="ok" style="font-size:13px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}. Test one to be sure the provider takes it.</span>`
-        + (r.skipped.length ? `<div class="warn" style="font-size:12.5px;margin-top:6px">${r.skipped.map(esc).join("<br>")}</div>` : "");
+      $("#saveOut").innerHTML = `<span class="ok" style="font-size:11px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}</span>` + (r.skipped.length ? `<div class="warn" style="font-size:10px;margin-top:4px">${r.skipped.map(esc).join("<br>")}</div>` : "");
       await load();
-    } catch (e) { $("#saveOut").innerHTML = `<span class="bad" style="font-size:13px">${esc(e.message)}</span>`; }
+    } catch (e) { $("#saveOut").innerHTML = `<span class="bad" style="font-size:11px">${esc(e.message)}</span>`; }
     $("#save").disabled = false;
   };
-
   $("#mkClient").onclick = async () => {
     const name = $("#clientName").value.trim(); if (!name) return;
     try {
       const r = await api("/v1/clients", { method: "POST", body: JSON.stringify({ name }) });
       $("#clientName").value = "";
-      $("#clientOut").innerHTML = `<div class="item"><div class="grow">
+      $("#clientOut").innerHTML = `<div class="item" style="flex-direction:column;align-items:stretch;gap:4px">
         <div class="dim">${esc(r.note)}</div>
-        <b style="display:block;margin-top:7px;color:var(--accent);word-break:break-all">${esc(r.token)}</b>
-      </div><button class="btn" id="useTok">Use in chat</button><button class="btn" id="copyTok">Copy</button></div>`;
+        <b style="color:var(--accent);word-break:break-all;font-size:11px">${esc(r.token)}</b>
+        <div class="row"><button class="btn" id="useTok" style="font-size:10px">Use in chat</button><button class="btn" id="copyTok" style="font-size:10px">Copy</button></div>
+      </div>`;
       $("#copyTok").onclick = () => navigator.clipboard.writeText(r.token);
       $("#useTok").onclick = () => { setClientToken(r.token); show("chat", true); };
       await load();
-    } catch (e) { $("#clientOut").innerHTML = `<span class="bad" style="font-size:13px">${esc(e.message)}</span>`; }
+    } catch (e) { $("#clientOut").innerHTML = `<span class="bad" style="font-size:11px">${esc(e.message)}</span>`; }
   };
 
   // ── chat ──────────────────────────────────────────────────────────────────
-  let clientToken = localStorage.getItem("gw.client") || "";
-  let turns = [];
-  let busy = false;
-
+  let clientToken = localStorage.getItem("gw.client") || "", turns = [], busy = false;
   $("#model").value = localStorage.getItem("gw.model") || "";
   $("#model").oninput = () => localStorage.setItem("gw.model", $("#model").value.trim());
 
@@ -660,123 +552,70 @@
     if (clientToken) localStorage.setItem("gw.client", clientToken); else localStorage.removeItem("gw.client");
     drawChat();
   }
-
   function drawChat() {
-    $("#chatGate").hidden = !!clientToken;
-    $("#chatApp").hidden = !clientToken;
+    $("#chatGate").hidden = !!clientToken; $("#chatApp").hidden = !clientToken;
     if (!clientToken) { $("#clientTok").value = ""; return; }
     $("#logCard").hidden = turns.length === 0;
     $("#log").innerHTML = turns.map((t) => `
       <div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}">
         <div class="who">${t.role === "user" ? "You" : t.trouble ? "Gateway" : "Assistant"}</div>
         <div class="bubble">${esc(t.content)}</div>
-        ${t.model || t.key ? `<div class="meta dim">
-          ${t.model ? "<span>" + esc(t.model) + "</span>" : ""}
-          ${t.key ? "<span>key " + esc(t.key) + "</span>" : ""}
-          ${t.tried > 1 ? "<span>" + t.tried + " keys tried</span>" : ""}
-        </div>` : ""}
+        ${t.model || t.key ? `<div class="meta dim">${t.model ? "<span>" + esc(t.model) + "</span>" : ""}${t.key ? "<span>key " + esc(t.key) + "</span>" : ""}${t.tried > 1 ? "<span>" + t.tried + " tried</span>" : ""}</div>` : ""}
       </div>`).join("");
     $("#log").scrollIntoView({ block: "end" });
   }
-
-  function conversation() {
-    return turns.filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content }));
-  }
-
+  function conversation() { return turns.filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content })); }
   function explain(status, payload) {
-    const code = payload?.error?.code;
-    const message = payload?.error?.message || "";
-    if (status === 401) return "That client token was rejected. Issue a fresh one in the Console tab.";
-    if (code === "rate_limited") {
-      const at = payload?.error?.reset_at;
-      return "Every key in the rotation is out of quota" + (at ? ", until " + when(at) + " UTC." : " right now.")
-        + " Add another key in the Console tab, or come back after that.";
-    }
-    if (code === "no_keys_configured") return "No provider key is in the rotation, so there is nothing to call. Add one in the Console tab.";
-    if (code === "bad_model_output") return "The model returned nothing the gateway could use. Sending it again often lands on a different model in the free pool, which usually behaves.";
+    const code = payload?.error?.code, message = payload?.error?.message || "";
+    if (status === 401) return "Client token rejected.";
+    if (code === "rate_limited") { const at = payload?.error?.reset_at; return "All keys rate limited" + (at ? " until " + when(at) : "") + ". Add more keys or wait."; }
+    if (code === "no_keys_configured") return "No keys in rotation.";
+    if (code === "bad_model_output") return "Model returned nothing usable. Try again.";
     if (code === "validation_failed") return message;
-    if (code === "upstream_error") return message + "\nIf a key is being refused, the Console tab can test each one on its own.";
-    return message || ("The gateway returned " + status + " with no explanation.");
+    if (code === "upstream_error") return message;
+    return message || ("HTTP " + status);
   }
-
-  function setBusy(next) {
-    busy = next;
-    $("#send").disabled = next;
-    $("#chatStatus").textContent = next ? "Waiting on the model…" : "";
-  }
+  function setBusy(next) { busy = next; $("#send").disabled = next; $("#chatStatus").textContent = next ? "Waiting…" : ""; }
 
   async function send() {
     if (busy) return;
     const text = $("#composer").value.trim(); if (!text || !clientToken) return;
-    turns.push({ role: "user", content: text });
-    $("#composer").value = "";
-    drawChat();
-    setBusy(true);
-
+    turns.push({ role: "user", content: text }); $("#composer").value = ""; drawChat(); setBusy(true);
     const body = { messages: conversation(), stream: true };
-    const model = $("#model").value.trim();
-    if (model) body.model = model;
-
-    const turn = { role: "assistant", content: "" };
-    let started = false;
-
+    const model = $("#model").value.trim(); if (model) body.model = model;
+    const turn = { role: "assistant", content: "" }; let started = false;
     try {
-      const res = await fetch("/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + clientToken, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
+      const res = await fetch("/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + clientToken, "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok || !res.body) {
-        const text2 = await res.text();
-        let payload = null;
-        try { payload = text2 ? JSON.parse(text2) : null; } catch {}
+        const text2 = await res.text(); let payload = null; try { payload = text2 ? JSON.parse(text2) : null; } catch {}
         turns.push({ role: "assistant", trouble: true, content: explain(res.status, payload) });
-        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "That client token was rejected."; drawChat(); return; }
+        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "Token rejected."; drawChat(); return; }
       } else {
-        turns.push(turn);
-        started = true;
-        drawChat();
+        turns.push(turn); started = true; drawChat();
         const bubble = $("#log").lastElementChild?.querySelector(".bubble");
-
-        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-        let buffer = "";
+        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader(); let buffer = "";
         while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += value;
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+          const { done, value } = await reader.read(); if (done) break;
+          buffer += value; const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (payload === "[DONE]") continue;
-            let json;
-            try { json = JSON.parse(payload); } catch { continue; }
+            const trimmed = line.trim(); if (!trimmed.startsWith("data:")) continue;
+            const pl = trimmed.slice(5).trim(); if (pl === "[DONE]") continue;
+            let json; try { json = JSON.parse(pl); } catch { continue; }
             if (json.x_gateway) { turn.model = json.model; turn.key = json.x_gateway.key; turn.tried = json.x_gateway.keys_tried?.length ?? 1; }
             const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              turn.content += delta;
-              if (bubble) { bubble.textContent = turn.content; $("#log").scrollIntoView({ block: "end" }); }
-            }
+            if (delta) { turn.content += delta; if (bubble) { bubble.textContent = turn.content; $("#log").scrollIntoView({ block: "end" }); } }
           }
         }
-
-        if (!turn.content) {
-          turn.trouble = true;
-          turn.content = explain(502, { error: { code: "bad_model_output" } });
-        }
+        if (!turn.content) { turn.trouble = true; turn.content = explain(502, { error: { code: "bad_model_output" } }); }
         drawChat();
       }
     } catch (e) {
-      if (started) { turn.trouble = true; turn.content += (turn.content ? "\n\n" : "") + "[connection lost: " + e.message + "]"; }
-      else turns.push({ role: "assistant", trouble: true, content: "The gateway could not be reached: " + e.message });
+      if (started) { turn.trouble = true; turn.content += (turn.content ? "\n\n" : "") + "[lost: " + e.message + "]"; }
+      else turns.push({ role: "assistant", trouble: true, content: "Unreachable: " + e.message });
       drawChat();
     }
     setBusy(false);
   }
-
   $("#chatUnlock").onclick = () => { $("#chatGateErr").textContent = ""; setClientToken($("#clientTok").value); };
   $("#clientTok").onkeydown = (e) => { if (e.key === "Enter") $("#chatUnlock").click(); };
   $("#chatLock").onclick = () => setClientToken("");
@@ -785,30 +624,17 @@
   $("#composer").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
 
   // ── monitor ──────────────────────────────────────────────────────────────
-  let monTimer = null;
-  let monCountdownTimer = null;
-
-  function stopMonitorTimer() {
-    clearInterval(monTimer); monTimer = null;
-    clearInterval(monCountdownTimer); monCountdownTimer = null;
-  }
-
+  let monTimer = null, monCountdownTimer = null;
+  function stopMonitorTimer() { clearInterval(monTimer); monTimer = null; clearInterval(monCountdownTimer); monCountdownTimer = null; }
   function startMonitorTimer() {
     stopMonitorTimer();
-    if ($("#monAutoToggle").checked) {
-      monTimer = setInterval(() => { if (view === "monitor") refreshMonitor(); }, 30_000);
-    }
+    if ($("#monAutoToggle").checked) monTimer = setInterval(() => { if (view === "monitor") refreshMonitor(); }, 30_000);
     monCountdownTimer = setInterval(tickCountdowns, 1000);
   }
-
   async function drawMonitor() {
-    $("#monitorLocked").hidden = !!token;
-    $("#monitorApp").hidden = !token;
-    if (!token) return;
-    startMonitorTimer();
-    await refreshMonitor();
+    $("#monitorLocked").hidden = !!token; $("#monitorApp").hidden = !token;
+    if (!token) return; startMonitorTimer(); await refreshMonitor();
   }
-
   $("#goUnlockMon").onclick = () => show("console", true);
   $("#monRefresh").onclick = () => refreshMonitor();
   $("#monAutoToggle").onchange = () => startMonitorTimer();
@@ -816,249 +642,108 @@
   async function refreshMonitor() {
     if (!token) return;
     try {
-      const [keysData, latency, limits, reliability, usage] = await Promise.all([
-        api("/v1/keys"),
-        api("/v1/latency"),
-        api("/v1/limits"),
-        api("/v1/reliability"),
-        api("/v1/usage?limit=50"),
-      ]);
-      renderHealth(keysData, limits);
-      renderLatency(latency);
-      renderRateLimits(keysData.queue);
-      renderMonReliability(reliability);
-      renderRecentErrors(usage);
-      $("#monAutoLabel").textContent = "Updated " + new Date().toLocaleTimeString();
-    } catch (e) {
-      if (e.message !== "unauthorized") {
-        $("#monAutoLabel").textContent = "Error: " + e.message;
-      }
-    }
+      const [keysData, latency, limits, reliability, usage] = await Promise.all([api("/v1/keys"), api("/v1/latency"), api("/v1/limits"), api("/v1/reliability"), api("/v1/usage?limit=50")]);
+      renderHealth(keysData, limits); renderLatency(latency); renderRateLimits(keysData.queue); renderMonReliability(reliability); renderRecentErrors(usage);
+      $("#monAutoLabel").textContent = new Date().toLocaleTimeString();
+    } catch (e) { if (e.message !== "unauthorized") $("#monAutoLabel").textContent = "err: " + e.message; }
   }
 
   function renderHealth(keysData, limits) {
-    const q = keysData.queue;
-    const total = q.length;
-    const nowIso = new Date().toISOString();
+    const q = keysData.queue, nowIso = new Date().toISOString();
     const active = q.filter((k) => !k.benched && !k.paused && !k.providerPaused && !(k.rateLimitedUntil && k.rateLimitedUntil > nowIso)).length;
     const limited = q.filter((k) => k.rateLimitedUntil && k.rateLimitedUntil > nowIso && !k.benched && !k.paused).length;
-    const benched = q.filter((k) => k.benched).length;
-    const paused = q.filter((k) => k.paused || k.providerPaused).length;
-    const healthColor = active > 0 ? "green" : (limited > 0 || benched > 0) ? "amber" : "red";
-    const healthWord = active > 0 ? "Healthy" : (limited > 0 || benched > 0) ? "Degraded" : "Down";
+    const benched = q.filter((k) => k.benched).length, paused = q.filter((k) => k.paused || k.providerPaused).length;
+    const color = active > 0 ? "green" : (limited > 0 || benched > 0) ? "amber" : "red";
+    const word = active > 0 ? "Healthy" : (limited > 0 || benched > 0) ? "Degraded" : "Down";
     const calls24 = limits.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
-
     $("#monHealth").innerHTML = `
-      <div><div class="k">Status</div><div class="v"><span class="health-dot ${healthColor}"></span>${healthWord}</div></div>
-      <div><div class="k">Keys</div><div class="v">${total}</div></div>
+      <div><div class="k">Status</div><div class="v"><span class="health-dot ${color}"></span>${word}</div></div>
+      <div><div class="k">Keys</div><div class="v">${q.length}</div></div>
       <div><div class="k">Active</div><div class="v ok">${active}</div></div>
-      <div><div class="k">Rate limited</div><div class="v ${limited ? "warn" : ""}">${limited}</div></div>
+      <div><div class="k">Limited</div><div class="v ${limited ? "warn" : ""}">${limited}</div></div>
       <div><div class="k">Benched</div><div class="v ${benched ? "bad" : ""}">${benched}</div></div>
-      <div><div class="k">Paused</div><div class="v ${paused ? "warn" : ""}">${paused}</div></div>
-      <div><div class="k">Calls, 24h</div><div class="v">${calls24}</div></div>`;
+      <div><div class="k">24h calls</div><div class="v">${calls24}</div></div>`;
   }
 
-  function renderLatency(latency) {
-    const fmt = (ms) => ms === null ? "—" : ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
-    const maxMs = Math.max(latency.p99 || 0, 1);
-
+  function renderLatency(lat) {
+    const fmt = (ms) => ms === null ? "—" : ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s";
+    const maxMs = Math.max(lat.p99 || 0, 1);
     $("#monLatencyGrid").innerHTML = `
-      <div><div class="k">Requests</div><div class="v">${latency.count}</div></div>
-      <div><div class="k">P50</div><div class="v">${fmt(latency.p50)}</div></div>
-      <div><div class="k">P95</div><div class="v ${(latency.p95 || 0) > 5000 ? "warn" : ""}">${fmt(latency.p95)}</div></div>
-      <div><div class="k">P99</div><div class="v ${(latency.p99 || 0) > 10000 ? "bad" : ""}">${fmt(latency.p99)}</div></div>`;
-
-    if (latency.count === 0) {
-      $("#monLatencyBars").innerHTML = '<p class="dim" style="margin:0">Not enough data yet.</p>';
-      $("#monLatencySpark").innerHTML = "";
-      return;
-    }
-
-    const barPct = (ms) => Math.min(100, Math.max(2, (ms / maxMs) * 100));
-    const barColor = (ms) => ms > 10000 ? "var(--rose)" : ms > 5000 ? "var(--amber)" : "var(--accent)";
-    const bars = [
-      { label: "P50", ms: latency.p50 },
-      { label: "P95", ms: latency.p95 },
-      { label: "P99", ms: latency.p99 },
-    ].filter((b) => b.ms !== null);
-
-    $("#monLatencyBars").innerHTML = bars.map((b) => `
-      <div class="latency-bar">
-        <div class="label">${b.label}</div>
-        <div class="track"><div class="fill" style="width:${barPct(b.ms).toFixed(1)}%;background:${barColor(b.ms)}"></div></div>
-        <div class="ms">${fmt(b.ms)}</div>
-      </div>`).join("");
-
-    // Sparkline from the last 30 recent latency values
-    const spark = latency.recent.slice(0, 30).reverse();
+      <div><div class="k">Reqs</div><div class="v">${lat.count}</div></div>
+      <div><div class="k">P50</div><div class="v">${fmt(lat.p50)}</div></div>
+      <div><div class="k">P95</div><div class="v ${(lat.p95||0)>5000?"warn":""}">${fmt(lat.p95)}</div></div>
+      <div><div class="k">P99</div><div class="v ${(lat.p99||0)>10000?"bad":""}">${fmt(lat.p99)}</div></div>`;
+    if (!lat.count) { $("#monLatencyBars").innerHTML = '<p class="dim">No data.</p>'; $("#monLatencySpark").innerHTML = ""; return; }
+    const pct = (ms) => Math.min(100, Math.max(2, (ms / maxMs) * 100));
+    const clr = (ms) => ms > 10000 ? "var(--rose)" : ms > 5000 ? "var(--amber)" : "var(--accent)";
+    $("#monLatencyBars").innerHTML = [{ l: "P50", ms: lat.p50 }, { l: "P95", ms: lat.p95 }, { l: "P99", ms: lat.p99 }].filter((b) => b.ms !== null).map((b) => `<div class="latency-bar"><div class="lb">${b.l}</div><div class="track"><div class="fill" style="width:${pct(b.ms).toFixed(1)}%;background:${clr(b.ms)}"></div></div><div class="ms">${fmt(b.ms)}</div></div>`).join("");
+    const spark = lat.recent.slice(0, 30).reverse();
     if (spark.length > 1) {
-      const maxSpark = Math.max(...spark.map((s) => s.latencyMs), 1);
-      const bars2 = spark.map((s) => {
-        const h = Math.max(2, Math.round((s.latencyMs / maxSpark) * 20));
-        const color = !s.ok ? "var(--rose)" : s.latencyMs > 5000 ? "var(--amber)" : "var(--accent)";
-        return `<i style="height:${h}px;background:${color}" title="${fmt(s.latencyMs)} – ${s.provider || "?"} – ${s.ok ? "ok" : "error"}"></i>`;
-      }).join("");
-      $("#monLatencySpark").innerHTML = '<div class="dim" style="margin-bottom:4px">Recent requests (newest →)</div><div class="spark">' + bars2 + "</div>";
-    } else {
-      $("#monLatencySpark").innerHTML = "";
-    }
+      const mx = Math.max(...spark.map((s) => s.latencyMs), 1);
+      $("#monLatencySpark").innerHTML = '<div class="dim" style="margin-bottom:3px">Recent →</div><div class="spark">' + spark.map((s) => { const h = Math.max(2, Math.round((s.latencyMs / mx) * 18)); return `<i style="height:${h}px;background:${!s.ok ? "var(--rose)" : s.latencyMs > 5000 ? "var(--amber)" : "var(--accent)"}" title="${fmt(s.latencyMs)}"></i>`; }).join("") + "</div>";
+    } else { $("#monLatencySpark").innerHTML = ""; }
   }
 
   function renderRateLimits(queue) {
-    if (!queue.length) {
-      $("#monRateLimits").innerHTML = '<p class="dim" style="margin:0">No keys configured.</p>';
-      return;
-    }
-
+    if (!queue.length) { $("#monRateLimits").innerHTML = '<p class="dim">No keys.</p>'; return; }
     const nowMs = Date.now();
-
     $("#monRateLimits").innerHTML = queue.map((k) => {
-      const hasSnapshot = k.rateLimitLimit !== null || k.rateLimitRemaining !== null || k.rateLimitReset !== null;
-      const observedAt = k.rateLimitObservedAt;
-      const freshness = observedAt ? ago(observedAt) : null;
-
-      // Rate-limit reset countdown
-      let resetInfo = "";
-      if (k.rateLimitReset) {
-        const resetMs = Date.parse(k.rateLimitReset);
-        const diff = resetMs - nowMs;
-        if (diff > 0) {
-          resetInfo = '<span class="countdown" data-reset="' + esc(k.rateLimitReset) + '">resets in ' + fmtDuration(diff) + "</span>";
-        } else {
-          resetInfo = '<span class="ok">reset</span>';
-        }
-      }
-
-      // The 429-based rateLimitedUntil (from Retry-After / OpenRouter metadata)
-      const stillLimited = k.rateLimitedUntil && Date.parse(k.rateLimitedUntil) > nowMs;
-      let limitedInfo = "";
-      if (stillLimited) {
-        const diff = Date.parse(k.rateLimitedUntil) - nowMs;
-        limitedInfo = '<span class="countdown" data-reset="' + esc(k.rateLimitedUntil) + '">429\'d — clears in ' + fmtDuration(diff) + "</span>";
-      }
-
-      const statusColor = k.benched ? "red" : (k.paused || k.providerPaused) ? "red" : stillLimited ? "amber" : "green";
-
-      // Remaining / Limit display
-      let quotaDisplay = "";
+      const has = k.rateLimitLimit !== null || k.rateLimitRemaining !== null || k.rateLimitReset !== null;
+      const fresh = k.rateLimitObservedAt ? ago(k.rateLimitObservedAt) : null;
+      let reset = "";
+      if (k.rateLimitReset) { const d = Date.parse(k.rateLimitReset) - nowMs; reset = d > 0 ? '<span class="countdown" data-reset="' + esc(k.rateLimitReset) + '">resets ' + fmtDuration(d) + "</span>" : '<span class="ok">reset</span>'; }
+      const still = k.rateLimitedUntil && Date.parse(k.rateLimitedUntil) > nowMs;
+      let limited = "";
+      if (still) { const d = Date.parse(k.rateLimitedUntil) - nowMs; limited = '<span class="countdown" data-reset="' + esc(k.rateLimitedUntil) + '">429 clears ' + fmtDuration(d) + "</span>"; }
+      const dot = k.benched ? "red" : (k.paused || k.providerPaused) ? "red" : still ? "amber" : "green";
+      let quota = "";
       if (k.rateLimitRemaining !== null && k.rateLimitLimit !== null) {
-        const pct = k.rateLimitLimit > 0 ? Math.round((k.rateLimitRemaining / k.rateLimitLimit) * 100) : 0;
-        const color = pct > 30 ? "var(--good)" : pct > 10 ? "var(--amber)" : "var(--rose)";
-        quotaDisplay = '<span style="color:' + color + '">' + k.rateLimitRemaining + '</span><span class="dim"> / ' + k.rateLimitLimit + " remaining</span>";
-      } else if (k.rateLimitRemaining !== null) {
-        quotaDisplay = "<span>" + k.rateLimitRemaining + '</span><span class="dim"> remaining</span>';
-      } else if (k.rateLimitLimit !== null) {
-        quotaDisplay = '<span class="dim">' + k.rateLimitLimit + " limit</span>";
-      }
-
-      return `
-      <div class="item" style="flex-wrap:wrap">
-        <span class="health-dot ${statusColor}"></span>
-        <div class="grow" style="min-width:200px">
-          <b>${esc(k.masked)}</b>
-          <span class="tag" style="margin-left:7px">${esc(providerLabel(k.provider))}</span>
-          ${k.benched ? '<span class="tag" style="margin-left:5px;background:rgba(251,113,133,.14);color:var(--rose)">benched</span>' : ""}
-          ${k.paused ? '<span class="tag" style="margin-left:5px;background:rgba(251,113,133,.14);color:var(--rose)">paused</span>' : ""}
-          ${!k.paused && k.providerPaused ? '<span class="tag" style="margin-left:5px;background:rgba(245,185,68,.14);color:var(--amber)">provider paused</span>' : ""}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;min-width:160px">
-          ${hasSnapshot ? quotaDisplay : '<span class="dim">not reported by provider</span>'}
-          ${resetInfo}
-          ${limitedInfo}
-          ${freshness ? '<span class="freshness">observed ' + freshness + "</span>" : ""}
-        </div>
-      </div>`;
+        const p = k.rateLimitLimit > 0 ? Math.round((k.rateLimitRemaining / k.rateLimitLimit) * 100) : 0;
+        const c = p > 30 ? "var(--good)" : p > 10 ? "var(--amber)" : "var(--rose)";
+        quota = '<span style="color:' + c + '">' + k.rateLimitRemaining + '</span><span class="dim">/' + k.rateLimitLimit + "</span>";
+      } else if (k.rateLimitRemaining !== null) { quota = k.rateLimitRemaining + ' <span class="dim">left</span>'; }
+      else if (k.rateLimitLimit !== null) { quota = '<span class="dim">' + k.rateLimitLimit + " limit</span>"; }
+      return `<div class="item" style="flex-wrap:wrap"><span class="health-dot ${dot}"></span>
+        <div class="grow" style="min-width:160px"><b>${esc(k.masked)}</b> <span class="tag">${esc(providerLabel(k.provider))}</span></div>
+        <div style="display:flex;flex-direction:column;gap:2px;align-items:flex-end;min-width:120px;font-size:11px">
+          ${has ? quota : '<span class="dim">not reported</span>'}${reset}${limited}${fresh ? '<span class="freshness">' + fresh + "</span>" : ""}
+        </div></div>`;
     }).join("");
   }
 
   function renderMonReliability(R) {
-    const pct = (n, d) => (d ? (100 * n) / d : 0);
-    const withoutRetries = pct(R.first_attempt_ok, R.with_key_attempts);
-    const withRetries = pct(R.ok_with_key_attempts, R.with_key_attempts);
-    const uplift = withRetries - withoutRetries;
-
+    const pct = (n, d) => d ? (100 * n) / d : 0;
+    const wo = pct(R.first_attempt_ok, R.with_key_attempts), w = pct(R.ok_with_key_attempts, R.with_key_attempts), up = w - wo;
     $("#monReliabilityBars").innerHTML = R.with_key_attempts ? `
-      <div class="bar-row">
-        <div class="bar-label">Without retries</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${withoutRetries.toFixed(1)}%;background:var(--text-3)"></div></div>
-        <div class="bar-value">${withoutRetries.toFixed(1)}%</div>
-      </div>
-      <div class="bar-row">
-        <div class="bar-label">With retries</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${withRetries.toFixed(1)}%;background:var(--accent)"></div></div>
-        <div class="bar-value">${withRetries.toFixed(1)}%</div>
-      </div>
-      <p class="dim" style="margin:4px 0 0">${uplift > 0.05 ? "+" + uplift.toFixed(1) + " points from retrying automatically" : "No measurable uplift yet."}</p>`
-      : '<p class="dim" style="margin:0">Not enough calls yet to tell.</p>';
-
-    const retryRate = pct(R.needed_retry, R.with_key_attempts);
-    const rescueRate = pct(R.retry_rescued, R.needed_retry);
+      <div class="bar-row"><div class="bar-label">1st attempt</div><div class="bar-track"><div class="bar-fill" style="width:${wo.toFixed(1)}%;background:var(--text-3)"></div></div><div class="bar-value">${wo.toFixed(1)}%</div></div>
+      <div class="bar-row"><div class="bar-label">With retries</div><div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(1)}%;background:var(--accent)"></div></div><div class="bar-value">${w.toFixed(1)}%</div></div>
+      ${up > 0.05 ? '<p class="dim" style="margin-top:4px">+' + up.toFixed(1) + " pts from retries</p>" : ""}` : '<p class="dim">Not enough data.</p>';
+    const rr = pct(R.needed_retry, R.with_key_attempts), rs = pct(R.retry_rescued, R.needed_retry);
     $("#monReliabilitySummary").innerHTML = `
-      <div><div class="k">Calls needing a retry</div><div class="v ${retryRate ? "warn" : ""}">${R.with_key_attempts ? retryRate.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Retry rescue rate</div><div class="v ${R.needed_retry ? "ok" : ""}">${R.needed_retry ? rescueRate.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Avg. keys per call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
+      <div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts ? rr.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry ? rs.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
   }
 
   function renderRecentErrors(usage) {
     const errors = usage.recent.filter((r) => !r.ok);
-    if (!errors.length) {
-      $("#monErrors").innerHTML = '<p class="dim" style="margin:0">No errors in recent calls.</p>';
-      return;
-    }
-    $("#monErrors").innerHTML = errors.slice(0, 10).map((r) => `
-      <div class="error-row">
-        <span class="er-time">${esc(when(r.at))}</span>
-        <span class="er-code">${esc((r.error || "unknown").slice(0, 60))}</span>
-        <span class="er-key">${esc(r.key_masked || "—")}</span>
-        <span class="dim" style="margin-left:8px">${esc(r.client)}</span>
-      </div>`).join("");
-  }
-
-  // ── helpers for monitor ──────────────────────────────────────────────────
-  function ago(isoStr) {
-    const diff = Date.now() - Date.parse(isoStr);
-    if (diff < 0) return "just now";
-    if (diff < 60_000) return Math.floor(diff / 1000) + "s ago";
-    if (diff < 3_600_000) return Math.floor(diff / 60_000) + "m ago";
-    if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + "h ago";
-    return Math.floor(diff / 86_400_000) + "d ago";
-  }
-
-  function fmtDuration(ms) {
-    if (ms <= 0) return "now";
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return s + "s";
-    const m = Math.floor(s / 60);
-    const rs = s % 60;
-    if (m < 60) return m + "m " + (rs ? rs + "s" : "");
-    const h = Math.floor(m / 60);
-    const rm = m % 60;
-    return h + "h " + (rm ? rm + "m" : "");
+    if (!errors.length) { $("#monErrors").innerHTML = '<p class="dim">None.</p>'; return; }
+    $("#monErrors").innerHTML = errors.slice(0, 10).map((r) => `<div class="error-row"><span class="er-time">${esc(ago(r.at))}</span><span class="er-code">${esc((r.error || "?").slice(0, 50))}</span><span class="er-key">${esc(r.key_masked || "—")}</span><span class="dim" style="margin-left:auto">${esc(r.client)}</span></div>`).join("");
   }
 
   function tickCountdowns() {
     const nowMs = Date.now();
     document.querySelectorAll("[data-reset]").forEach((el) => {
-      const resetMs = Date.parse(el.dataset.reset);
-      const diff = resetMs - nowMs;
-      if (diff <= 0) {
-        if (el.classList.contains("countdown")) {
-          el.className = "ok";
-          el.textContent = "reset";
-        }
-      } else {
-        const prefix = el.textContent.includes("429") ? "429'd — clears in " : "resets in ";
-        el.textContent = prefix + fmtDuration(diff);
-      }
+      const diff = Date.parse(el.dataset.reset) - nowMs;
+      if (diff <= 0) { if (el.classList.contains("countdown")) { el.className = "ok"; el.textContent = "reset"; } }
+      else { const pfx = el.textContent.includes("429") ? "429 clears " : "resets "; el.textContent = pfx + fmtDuration(diff); }
     });
   }
 
   // ── insights ──────────────────────────────────────────────────────────────
   let insightTurns = [];
-
   async function drawInsights() {
-    $("#insightsLocked").hidden = !!token;
-    $("#insightsApp").hidden = !token;
+    $("#insightsLocked").hidden = !!token; $("#insightsApp").hidden = !token;
     if (!token) return;
     try { await Promise.all([loadLimits(), loadReliability()]); } catch (e) { if (e.message !== "unauthorized") alert(e.message); }
   }
@@ -1067,125 +752,70 @@
   async function loadLimits() {
     const L = await api("/v1/limits");
     const calls24h = L.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
-    const rateLimited = L.keys.filter((k) => k.rateLimitedRecently).length;
-    const currentlyLimited = L.keys.filter((k) => k.currentlyLimited).length;
-    const benched = L.keys.filter((k) => k.benched).length;
-    const paused = L.keys.filter((k) => k.paused || k.providerPaused).length;
+    const rl = L.keys.filter((k) => k.rateLimitedRecently).length, cl = L.keys.filter((k) => k.currentlyLimited).length;
+    const bc = L.keys.filter((k) => k.benched).length, ps = L.keys.filter((k) => k.paused || k.providerPaused).length;
     $("#limitsSummary").innerHTML = `
       <div><div class="k">Keys</div><div class="v">${L.keys.length}</div></div>
-      <div><div class="k">Calls, 24h</div><div class="v">${calls24h}</div></div>
-      <div><div class="k">Limited right now</div><div class="v ${currentlyLimited ? "warn" : ""}">${currentlyLimited}</div></div>
-      <div><div class="k">Rate limited, 24h</div><div class="v ${rateLimited ? "warn" : ""}">${rateLimited}</div></div>
-      <div><div class="k">Benched</div><div class="v ${benched ? "bad" : ""}">${benched}</div></div>
-      <div><div class="k">Paused</div><div class="v ${paused ? "warn" : ""}">${paused}</div></div>`;
-
+      <div><div class="k">24h calls</div><div class="v">${calls24h}</div></div>
+      <div><div class="k">Limited now</div><div class="v ${cl?"warn":""}">${cl}</div></div>
+      <div><div class="k">Limited 24h</div><div class="v ${rl?"warn":""}">${rl}</div></div>
+      <div><div class="k">Benched</div><div class="v ${bc?"bad":""}">${bc}</div></div>
+      <div><div class="k">Paused</div><div class="v ${ps?"warn":""}">${ps}</div></div>`;
     $("#limitsByProvider").innerHTML = L.byProvider.length
-      ? `<tr><th>Provider</th><th>Keys</th><th>Calls, 24h</th><th>Limited now</th><th>Rate limited, 24h</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `
-        <tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td>
-        <td class="num ${p.currentlyLimited ? "warn" : ""}">${p.currentlyLimited}</td>
-        <td class="num ${p.rateLimitedRecently ? "warn" : ""}">${p.rateLimitedRecently}</td>
-        <td class="num ${p.benched ? "bad" : ""}">${p.benched}</td><td class="num ${p.paused ? "warn" : ""}">${p.paused}</td></tr>`).join("")
-      : '<tr><td class="dim">No keys configured.</td></tr>';
-
+      ? `<tr><th>Provider</th><th>Keys</th><th>24h</th><th>Limited</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `<tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td><td class="num ${p.currentlyLimited?"warn":""}">${p.currentlyLimited}</td><td class="num ${p.benched?"bad":""}">${p.benched}</td><td class="num ${p.paused?"warn":""}">${p.paused}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
     $("#limitsByKey").innerHTML = L.keys.length
-      ? `<tr><th>Key</th><th>Provider</th><th>Calls, 24h</th><th>Status</th></tr>` + L.keys.map((k) => `
-        <tr><td>${esc(k.masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.callsLast24h}</td>
-        <td>${
-          k.benched ? '<span class="bad">benched</span>'
-          : (k.paused || k.providerPaused) ? '<span class="warn">paused</span>'
-          : k.currentlyLimited ? '<span class="warn">limited until ' + esc(when(k.rateLimitedUntil)) + '</span>'
-          : k.rateLimitedRecently ? '<span class="warn">rate limited</span>'
-          : '<span class="ok">active</span>'
-        }</td></tr>`).join("")
-      : '<tr><td class="dim">No keys yet.</td></tr>';
+      ? `<tr><th>Key</th><th>Provider</th><th>24h</th><th>Status</th></tr>` + L.keys.map((k) => `<tr><td>${esc(k.masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.callsLast24h}</td><td>${k.benched?'<span class="bad">benched</span>':(k.paused||k.providerPaused)?'<span class="warn">paused</span>':k.currentlyLimited?'<span class="warn">limited '+esc(ago(k.rateLimitedUntil))+'</span>':k.rateLimitedRecently?'<span class="warn">limited</span>':'<span class="ok">ok</span>'}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
   }
 
   async function loadReliability() {
     const R = await api("/v1/reliability");
-    const pct = (n, d) => (d ? (100 * n) / d : 0);
-    const withoutRetries = pct(R.first_attempt_ok, R.with_key_attempts);
-    const withRetries = pct(R.ok_with_key_attempts, R.with_key_attempts);
-    const uplift = withRetries - withoutRetries;
-
+    const pct = (n, d) => d ? (100 * n) / d : 0;
+    const wo = pct(R.first_attempt_ok, R.with_key_attempts), w = pct(R.ok_with_key_attempts, R.with_key_attempts), up = w - wo;
     $("#reliabilityBars").innerHTML = R.with_key_attempts ? `
-      <div class="bar-row">
-        <div class="bar-label">Without retries</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${withoutRetries.toFixed(1)}%;background:var(--text-3)"></div></div>
-        <div class="bar-value">${withoutRetries.toFixed(1)}%</div>
-      </div>
-      <div class="bar-row">
-        <div class="bar-label">With retries</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${withRetries.toFixed(1)}%;background:var(--accent)"></div></div>
-        <div class="bar-value">${withRetries.toFixed(1)}%</div>
-      </div>
-      <p class="dim" style="margin:4px 0 0">${uplift > 0.05 ? "+" + uplift.toFixed(1) + " points from retrying automatically" : "No measurable uplift yet."}</p>`
-      : '<p class="dim" style="margin:0">Not enough calls yet to tell.</p>';
-
-    const retryRate = pct(R.needed_retry, R.with_key_attempts);
-    const rescueRate = pct(R.retry_rescued, R.needed_retry);
+      <div class="bar-row"><div class="bar-label">1st attempt</div><div class="bar-track"><div class="bar-fill" style="width:${wo.toFixed(1)}%;background:var(--text-3)"></div></div><div class="bar-value">${wo.toFixed(1)}%</div></div>
+      <div class="bar-row"><div class="bar-label">With retries</div><div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(1)}%;background:var(--accent)"></div></div><div class="bar-value">${w.toFixed(1)}%</div></div>
+      ${up > 0.05 ? '<p class="dim" style="margin-top:4px">+' + up.toFixed(1) + " pts from retries</p>" : ""}` : '<p class="dim">Not enough data.</p>';
+    const rr = pct(R.needed_retry, R.with_key_attempts), rs = pct(R.retry_rescued, R.needed_retry);
     $("#reliabilitySummary").innerHTML = `
-      <div><div class="k">Calls needing a retry</div><div class="v ${retryRate ? "warn" : ""}">${R.with_key_attempts ? retryRate.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Retry rescue rate</div><div class="v ${R.needed_retry ? "ok" : ""}">${R.needed_retry ? rescueRate.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Avg. keys per call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
-
+      <div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts ? rr.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry ? rs.toFixed(0) + "%" : "—"}</div></div>
+      <div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
     $("#reliabilityByProvider").innerHTML = R.byProvider.length
-      ? `<tr><th>Provider</th><th>Calls</th><th>Retry rate</th><th>Rescue rate</th></tr>` + R.byProvider.map((p) => `
-        <tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.total}</td>
-        <td class="num">${pct(p.needed_retry, p.total).toFixed(0)}%</td>
-        <td class="num">${p.needed_retry ? pct(p.retry_rescued, p.needed_retry).toFixed(0) + "%" : "—"}</td></tr>`).join("")
-      : '<tr><td class="dim">Nothing yet.</td></tr>';
+      ? `<tr><th>Provider</th><th>Calls</th><th>Retry %</th><th>Rescue %</th></tr>` + R.byProvider.map((p) => `<tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.total}</td><td class="num">${pct(p.needed_retry, p.total).toFixed(0)}%</td><td class="num">${p.needed_retry ? pct(p.retry_rescued, p.needed_retry).toFixed(0) + "%" : "—"}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
   }
 
   $("#genInsights").onclick = async () => {
-    const btn = $("#genInsights");
-    btn.disabled = true;
-    $("#insightsOut").innerHTML = '<p class="dim" style="margin:0">Reading the data…</p>';
+    $("#genInsights").disabled = true; $("#insightsOut").innerHTML = '<p class="dim">Analyzing…</p>';
     try {
       const r = await api("/v1/insights", { method: "POST" });
-      $("#insightsOut").innerHTML = `
-        <p style="margin:0 0 10px;font-weight:600">${esc(r.headline)}</p>
-        <ul style="margin:0;padding-left:18px">${r.bullets.map((b) => `<li style="margin-top:5px">${esc(b)}</li>`).join("")}</ul>
-        <p class="dim" style="margin-top:12px">via ${esc(r.model)} &middot; key ${esc(r.key)}</p>`;
-    } catch (e) {
-      $("#insightsOut").innerHTML = '<span class="bad" style="font-size:13px">' + esc(e.message) + "</span>";
-    }
-    btn.disabled = false;
+      $("#insightsOut").innerHTML = `<p style="margin:0 0 6px;font-weight:600;font-family:var(--sans);font-size:13px">${esc(r.headline)}</p><ul style="margin:0;padding-left:16px;font-family:var(--sans);font-size:12px">${r.bullets.map((b) => `<li style="margin-top:3px">${esc(b)}</li>`).join("")}</ul><p class="dim" style="margin-top:8px">${esc(r.model)} · ${esc(r.key)}</p>`;
+    } catch (e) { $("#insightsOut").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+    $("#genInsights").disabled = false;
   };
 
   function drawDataChat() {
-    $("#dataChatLog").innerHTML = insightTurns.map((t) => `
-      <div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}">
-        <div class="who">${t.role === "user" ? "You" : "Gateway"}</div>
-        <div class="bubble">${esc(t.content)}</div>
-      </div>`).join("");
+    $("#dataChatLog").innerHTML = insightTurns.map((t) => `<div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}"><div class="who">${t.role === "user" ? "You" : "Gateway"}</div><div class="bubble">${esc(t.content)}</div></div>`).join("");
     $("#dataChatLog").scrollIntoView({ block: "end" });
   }
-
   async function sendDataChat() {
     const text = $("#dataChatInput").value.trim(); if (!text) return;
-    insightTurns.push({ role: "user", content: text });
-    $("#dataChatInput").value = "";
-    drawDataChat();
-    $("#dataChatSend").disabled = true;
-    $("#dataChatStatus").textContent = "Thinking…";
+    insightTurns.push({ role: "user", content: text }); $("#dataChatInput").value = ""; drawDataChat();
+    $("#dataChatSend").disabled = true; $("#dataChatStatus").textContent = "Thinking…";
     try {
       const history = insightTurns.slice(0, -1).filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content }));
       const r = await api("/v1/insights/chat", { method: "POST", body: JSON.stringify({ question: text, history }) });
       insightTurns.push({ role: "assistant", content: r.answer });
-    } catch (e) {
-      insightTurns.push({ role: "assistant", trouble: true, content: e.message });
-    }
-    $("#dataChatSend").disabled = false;
-    $("#dataChatStatus").textContent = "";
-    drawDataChat();
+    } catch (e) { insightTurns.push({ role: "assistant", trouble: true, content: e.message }); }
+    $("#dataChatSend").disabled = false; $("#dataChatStatus").textContent = ""; drawDataChat();
   }
   $("#dataChatSend").onclick = sendDataChat;
   $("#dataChatInput").onkeydown = (e) => { if (e.key === "Enter") sendDataChat(); };
 
-  // ── start ─────────────────────────────────────────────────────────────────
   const startPath = location.pathname.replace(/\/+$/, "");
-  const startView = startPath === "/chat" ? "chat" : startPath === "/insights" ? "insights" : startPath === "/monitor" ? "monitor" : "console";
-  show(startView, false);
+  show(startPath === "/chat" ? "chat" : startPath === "/insights" ? "insights" : startPath === "/monitor" ? "monitor" : "console", false);
   if (token) unlock(token); else { $("#gate").hidden = false; if (view === "console") $("#tok").focus(); }
 })();
 </script>
