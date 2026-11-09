@@ -744,8 +744,9 @@
         const name = $("#clientName").value.trim(); if (!name) return;
         try { const r = await api("/v1/clients", { method: "POST", body: JSON.stringify({ name }) });
           $("#clientName").value = "";
-          $("#clientOut").innerHTML = `<div class="item" style="flex-direction:column;align-items:stretch;gap:4px;margin-bottom:8px"><div class="dim">${esc(r.note)}</div><b style="color:var(--accent);word-break:break-all;font-size:11px">${esc(r.token)}</b><button class="btn" style="font-size:10px" onclick="navigator.clipboard.writeText('${esc(r.token)}')">Copy</button></div>`;
-          pageLoaders.config();
+          $("#clientOut").innerHTML = `<div class="item" style="flex-direction:column;align-items:stretch;gap:4px;margin-bottom:8px"><div class="dim">${esc(r.note)}</div><b style="color:var(--accent);word-break:break-all;font-size:11px">${esc(r.token)}</b><div class="row" style="gap:6px"><button class="btn" style="font-size:10px" onclick="navigator.clipboard.writeText('${esc(r.token)}');this.textContent='Copied!'">Copy</button><button class="btn" style="font-size:10px" onclick="pageLoaders.config()">Done</button></div></div>`;
+          const newClient = document.createElement("div"); newClient.className = "item"; newClient.innerHTML = `<div class="grow"><b>${esc(name)}</b><span class="dim" style="margin-left:6px">0 calls · never</span></div><button class="btn danger" data-revoke="${esc(name)}" style="font-size:10px">Revoke</button>`; $("#clientsList").prepend(newClient);
+          newClient.querySelector("[data-revoke]").onclick = async () => { if (!confirm('Revoke "' + name + '"?')) return; try { await api("/v1/clients/" + encodeURIComponent(name), { method: "DELETE" }); pageLoaders.config(); } catch (e) { alert(e.message); } };
         } catch (e) { $("#clientOut").innerHTML = `<span class="bad" style="font-size:11px">${esc(e.message)}</span>`; }
       };
       $$("[data-revoke]").forEach((b) => (b.onclick = async () => { if (!confirm('Revoke "' + b.dataset.revoke + '"?')) return; try { await api("/v1/clients/" + encodeURIComponent(b.dataset.revoke), { method: "DELETE" }); pageLoaders.config(); } catch (e) { alert(e.message); } }));
