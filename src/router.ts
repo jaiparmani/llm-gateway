@@ -63,7 +63,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
   // One file, three pages: the console, the chat, and insights. All the same
   // document, which picks its tab from the path, so there is still only one
   // asset to ship.
-  if ((path === "/" || path === "/monitor" || path === "/chat" || path === "/insights") && method === "GET") {
+  if (["", "/", "/monitor", "/chat", "/insights", "/dashboard", "/requests", "/keys", "/providers",
+       "/analytics", "/limits", "/apps", "/routing", "/alerts", "/settings"].includes(path) && method === "GET") {
     return new Response(ADMIN_HTML, {
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -83,6 +84,12 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       const client = await deps.store.authenticate(bearer);
       if (!client) {
         return json({ error: { code: "unauthorized", message: "Send Authorization: Bearer <client token>." } }, 401);
+      }
+      const rateCheck = await deps.store.checkClientRate(client);
+      if (!rateCheck.allowed) {
+        return new Response(JSON.stringify({ error: { code: "rate_limited", message: "Client rate limit exceeded." } }, null, 2), {
+          status: 429, headers: { "content-type": "application/json; charset=utf-8", ...CORS, "retry-after": String(rateCheck.retryAfter ?? 60) },
+        });
       }
       const body = (await request.json()) as Record<string, any>;
       const messages = parseMessages(body.messages);
@@ -182,6 +189,12 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       if (!client) {
         return json({ error: { code: "unauthorized", message: "Send Authorization: Bearer <client token>." } }, 401);
       }
+      const rateCheck2 = await deps.store.checkClientRate(client);
+      if (!rateCheck2.allowed) {
+        return new Response(JSON.stringify({ error: { code: "rate_limited", message: "Client rate limit exceeded." } }, null, 2), {
+          status: 429, headers: { "content-type": "application/json; charset=utf-8", ...CORS, "retry-after": String(rateCheck2.retryAfter ?? 60) },
+        });
+      }
       const body = (await request.json()) as Record<string, any>;
       const message = typeof body.message === "string" ? body.message : "";
       const options = parseIntentOptions(body.options);
@@ -219,6 +232,12 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       const client = await deps.store.authenticate(bearer);
       if (!client) {
         return json({ error: { code: "unauthorized", message: "Send Authorization: Bearer <client token>." } }, 401);
+      }
+      const rateCheck3 = await deps.store.checkClientRate(client);
+      if (!rateCheck3.allowed) {
+        return new Response(JSON.stringify({ error: { code: "rate_limited", message: "Client rate limit exceeded." } }, null, 2), {
+          status: 429, headers: { "content-type": "application/json; charset=utf-8", ...CORS, "retry-after": String(rateCheck3.retryAfter ?? 60) },
+        });
       }
       const body = (await request.json()) as Record<string, any>;
       const inputs = parseEmbeddingInput(body.input);
@@ -260,6 +279,10 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
       path.startsWith("/v1/keys") || path.startsWith("/v1/clients") ||
       path === "/v1/usage" || path === "/v1/models" ||
       path === "/v1/limits" || path === "/v1/latency" || path === "/v1/reliability" || path.startsWith("/v1/insights") ||
+      path === "/v1/dashboard" || path.startsWith("/v1/requests") ||
+      path.startsWith("/v1/pricing") || path.startsWith("/v1/analytics") ||
+      path.startsWith("/v1/applications") || path.startsWith("/v1/routing") ||
+      path.startsWith("/v1/alerts") || path.startsWith("/v1/rate-limits") ||
       /^\/v1\/providers\/[^/]+\/(pause|resume)$/.test(path)
     ) {
       if (!deps.adminToken) {
@@ -482,6 +505,192 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
         }
         throw e;
       }
+    }
+
+    // ── dashboard ──────────────────────────────────────────────────────────
+    if (path === "/v1/dashboard" && method === "GET") {
+      const metrics = await deps.store.dashboardMetrics();
+      const keys = await deps.store.publicKeys();
+      const pausedProviders = await deps.store.pausedProviders();
+      const nowMs = Date.now();
+      const active = keys.filter((k) => !k.benched && !k.paused && !pausedProviders.has(k.provider) && (!k.rateLimitedUntil || Date.parse(k.rateLimitedUntil) <= nowMs)).length;
+      const limited = keys.filter((k) => k.rateLimitedUntil && Date.parse(k.rateLimitedUntil) > nowMs && !k.benched && !k.paused).length;
+      const benched = keys.filter((k) => k.benched).length;
+      const paused = keys.length - keys.filter((k) => !k.paused && !pausedProviders.has(k.provider)).length;
+      return json({
+        ...metrics,
+        keys: { total: keys.length, active, limited, benched, paused },
+      });
+    }
+
+    // ── request explorer ────────────────────────────────────────────────────
+    if (path === "/v1/requests" && method === "GET") {
+      const p = url.searchParams;
+      return json(await deps.store.searchRequests({
+        client: p.get("client") || undefined,
+        provider: p.get("provider") || undefined,
+        status: p.get("status") === "ok" || p.get("status") === "error" ? p.get("status") as "ok" | "error" : undefined,
+        errorCode: p.get("error_code") || undefined,
+        from: p.get("from") || undefined,
+        to: p.get("to") || undefined,
+        minLatency: p.get("min_latency") ? Number(p.get("min_latency")) : undefined,
+        limit: p.get("limit") ? Number(p.get("limit")) : undefined,
+        offset: p.get("offset") ? Number(p.get("offset")) : undefined,
+      }));
+    }
+    const requestMatch = /^\/v1\/requests\/([^/]+)$/.exec(path);
+    if (requestMatch && method === "GET") {
+      const row = await deps.store.getRequest(decodeURIComponent(requestMatch[1]!));
+      if (!row) return json({ error: { code: "not_found", message: "No request with that id." } }, 404);
+      return json(row);
+    }
+
+    // ── pricing ─────────────────────────────────────────────────────────────
+    if (path === "/v1/pricing" && method === "GET") {
+      return json({ pricing: await deps.store.getPricing() });
+    }
+    if (path === "/v1/pricing" && method === "POST") {
+      const body = (await request.json()) as { provider?: unknown; model?: unknown; inputPricePerM?: unknown; outputPricePerM?: unknown };
+      const provider = typeof body.provider === "string" ? body.provider : "";
+      const model = typeof body.model === "string" ? body.model : "";
+      const inp = typeof body.inputPricePerM === "number" ? body.inputPricePerM : NaN;
+      const out = typeof body.outputPricePerM === "number" ? body.outputPricePerM : NaN;
+      if (!provider || !model || !Number.isFinite(inp) || !Number.isFinite(out)) {
+        return json({ error: { code: "validation_failed", message: "provider, model, inputPricePerM, outputPricePerM required." } }, 400);
+      }
+      await deps.store.setPricing(provider, model, inp, out);
+      return json({ ok: true });
+    }
+    const pricingDelMatch = /^\/v1\/pricing\/([^/]+)\/(.+)$/.exec(path);
+    if (pricingDelMatch && method === "DELETE") {
+      const ok = await deps.store.deletePricing(decodeURIComponent(pricingDelMatch[1]!), decodeURIComponent(pricingDelMatch[2]!));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+
+    // ── cost analytics ──────────────────────────────────────────────────────
+    if (path === "/v1/analytics/cost" && method === "GET") {
+      const groupBy = url.searchParams.get("group_by") as "client" | "provider" | "model" || "provider";
+      const days = Number(url.searchParams.get("days") ?? 30) || 30;
+      return json({ data: await deps.store.costAnalytics(groupBy, days) });
+    }
+
+    // ── applications ────────────────────────────────────────────────────────
+    if (path === "/v1/applications" && method === "GET") {
+      return json({ applications: await deps.store.listApplications() });
+    }
+    if (path === "/v1/applications" && method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(name)) {
+        return json({ error: { code: "validation_failed", message: "name must be lowercase kebab/snake, 1-40 chars." } }, 400);
+      }
+      const app = await deps.store.createApplication({
+        name,
+        description: typeof body.description === "string" ? body.description : undefined,
+        rateLimitRpm: typeof body.rateLimitRpm === "number" ? body.rateLimitRpm : undefined,
+        rateLimitRpd: typeof body.rateLimitRpd === "number" ? body.rateLimitRpd : undefined,
+        budgetDaily: typeof body.budgetDaily === "number" ? body.budgetDaily : undefined,
+        budgetMonthly: typeof body.budgetMonthly === "number" ? body.budgetMonthly : undefined,
+      });
+      return json(app, 201);
+    }
+    const appMatch = /^\/v1\/applications\/(\d+)$/.exec(path);
+    if (appMatch && method === "GET") {
+      const app = await deps.store.getApplication(Number(appMatch[1]));
+      if (!app) return json({ error: { code: "not_found" } }, 404);
+      const models = await deps.store.getApplicationModels(Number(appMatch[1]));
+      return json({ ...app, models });
+    }
+    if (appMatch && method === "DELETE") {
+      const ok = await deps.store.deleteApplication(Number(appMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+    const appModelsMatch = /^\/v1\/applications\/(\d+)\/models$/.exec(path);
+    if (appModelsMatch && method === "POST") {
+      const body = (await request.json()) as { models?: unknown };
+      if (!Array.isArray(body.models)) return json({ error: { code: "validation_failed", message: "models must be an array." } }, 400);
+      const models = body.models.filter((m: unknown): m is { provider: string; model: string } =>
+        !!m && typeof m === "object" && typeof (m as Record<string, unknown>).provider === "string");
+      await deps.store.setApplicationModels(Number(appModelsMatch[1]), models.map((m) => ({ provider: m.provider, model: m.model ?? "*" })));
+      return json({ ok: true, models: await deps.store.getApplicationModels(Number(appModelsMatch[1])) });
+    }
+
+    // ── routing rules ───────────────────────────────────────────────────────
+    if (path === "/v1/routing" && method === "GET") {
+      const appId = url.searchParams.get("application_id");
+      return json({ rules: await deps.store.listRoutingRules(appId ? Number(appId) : undefined) });
+    }
+    if (path === "/v1/routing" && method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const ruleType = typeof body.ruleType === "string" ? body.ruleType : "";
+      const config = typeof body.config === "string" ? body.config : JSON.stringify(body.config ?? {});
+      if (!ruleType) return json({ error: { code: "validation_failed", message: "ruleType required." } }, 400);
+      const rule = await deps.store.createRoutingRule({
+        applicationId: typeof body.applicationId === "number" ? body.applicationId : undefined,
+        priority: typeof body.priority === "number" ? body.priority : 0,
+        ruleType, config,
+      });
+      return json(rule, 201);
+    }
+    const routingMatch = /^\/v1\/routing\/(\d+)$/.exec(path);
+    if (routingMatch && method === "DELETE") {
+      const ok = await deps.store.deleteRoutingRule(Number(routingMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+
+    // ── alerts ──────────────────────────────────────────────────────────────
+    if (path === "/v1/alerts" && method === "GET") {
+      return json({ rules: await deps.store.listAlertRules() });
+    }
+    if (path === "/v1/alerts" && method === "POST") {
+      const body = (await request.json()) as Record<string, unknown>;
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const conditionType = typeof body.conditionType === "string" ? body.conditionType : "";
+      const threshold = typeof body.threshold === "number" ? body.threshold : NaN;
+      const webhookUrl = typeof body.webhookUrl === "string" ? body.webhookUrl : "";
+      if (!name || !conditionType || !Number.isFinite(threshold) || !webhookUrl) {
+        return json({ error: { code: "validation_failed", message: "name, conditionType, threshold, webhookUrl required." } }, 400);
+      }
+      const rule = await deps.store.createAlertRule({
+        name, conditionType, threshold,
+        windowMinutes: typeof body.windowMinutes === "number" ? body.windowMinutes : 5,
+        webhookUrl,
+        cooldownMinutes: typeof body.cooldownMinutes === "number" ? body.cooldownMinutes : undefined,
+      });
+      return json(rule, 201);
+    }
+    const alertMatch = /^\/v1\/alerts\/(\d+)$/.exec(path);
+    if (alertMatch && method === "DELETE") {
+      const ok = await deps.store.deleteAlertRule(Number(alertMatch[1]));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
+    }
+    if (path === "/v1/alerts/history" && method === "GET") {
+      const ruleId = url.searchParams.get("rule_id");
+      return json({ history: await deps.store.alertHistory(ruleId ? Number(ruleId) : undefined) });
+    }
+
+    // ── client rate limits ──────────────────────────────────────────────────
+    if (path === "/v1/rate-limits" && method === "GET") {
+      const client = url.searchParams.get("client");
+      if (client) {
+        const limit = await deps.store.getClientRateLimit(client);
+        return json(limit ?? { requestsPerMinute: null, requestsPerDay: null });
+      }
+      return json({ note: "Pass ?client=name to check a client's rate limits." });
+    }
+    if (path === "/v1/rate-limits" && method === "POST") {
+      const body = (await request.json()) as { client?: unknown; requestsPerMinute?: unknown; requestsPerDay?: unknown };
+      const client = typeof body.client === "string" ? body.client : "";
+      if (!client) return json({ error: { code: "validation_failed", message: "client required." } }, 400);
+      const rpm = typeof body.requestsPerMinute === "number" ? body.requestsPerMinute : null;
+      const rpd = typeof body.requestsPerDay === "number" ? body.requestsPerDay : null;
+      await deps.store.setClientRateLimit(client, rpm, rpd);
+      return json({ ok: true, client, requestsPerMinute: rpm, requestsPerDay: rpd });
+    }
+    const rateLimitDelMatch = /^\/v1\/rate-limits\/([^/]+)$/.exec(path);
+    if (rateLimitDelMatch && method === "DELETE") {
+      const ok = await deps.store.deleteClientRateLimit(decodeURIComponent(rateLimitDelMatch[1]!));
+      return json(ok ? { ok: true } : { error: { code: "not_found" } }, ok ? 200 : 404);
     }
 
     return json({ error: { code: "not_found", message: `No route for ${method} ${path}.` } }, 404);

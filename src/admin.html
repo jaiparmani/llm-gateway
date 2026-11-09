@@ -1,50 +1,73 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <title>llm-gateway</title>
 <style>
   :root{
-    --bg:#0a0b0e;--surface:#111318;--surface-2:#16181f;--border:rgba(255,255,255,.06);
+    --bg:#0a0b0e;--surface:#111318;--surface-2:#16181f;--surface-3:#1c1f28;
+    --border:rgba(255,255,255,.06);--border-2:rgba(255,255,255,.1);
     --text:#d4d7e0;--text-2:#7c8294;--text-3:#4e5364;
-    --accent:#5ee0c8;--accent-dim:rgba(94,224,200,.1);
-    --amber:#e9a830;--rose:#ef5f7b;--good:#4ade80;
+    --accent:#5ee0c8;--accent-dim:rgba(94,224,200,.1);--accent-2:rgba(94,224,200,.25);
+    --amber:#e9a830;--rose:#ef5f7b;--good:#4ade80;--blue:#60a5fa;
     --mono:ui-monospace,"SF Mono",Menlo,monospace;
     --sans:system-ui,-apple-system,sans-serif;
+    --sidebar-w:220px;
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f6f8;--surface:#fff;--surface-2:#f0f1f4;--surface-3:#e8e9ed;
+    --border:rgba(0,0,0,.08);--border-2:rgba(0,0,0,.12);
+    --text:#1a1d26;--text-2:#5c6070;--text-3:#8b8fa0;
+    --accent:#0d9373;--accent-dim:rgba(13,147,115,.08);--accent-2:rgba(13,147,115,.2);
+    --amber:#b47d1b;--rose:#d43d5b;--good:#16a34a;--blue:#2563eb;
   }
   *{box-sizing:border-box;margin:0}
-  body{background:var(--bg);color:var(--text);font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased}
+  body{background:var(--bg);color:var(--text);font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased;display:flex;min-height:100vh}
   button,input,textarea,select{font:inherit;color:inherit}
   button{cursor:pointer;border:none;background:none}
-  code{font:inherit;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:4px}
   a{color:var(--accent);text-decoration:none}
 
-  .wrap{max-width:820px;margin:0 auto;padding:32px 16px 80px}
-  @media(min-width:600px){.wrap{padding:36px 24px 80px}}
+  /* ── sidebar ── */
+  .sidebar{width:var(--sidebar-w);flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10;transition:transform .2s}
+  .sidebar .logo{padding:16px 16px 12px;font:600 14px/1 var(--sans);color:var(--accent);letter-spacing:-.02em}
+  .sidebar nav{flex:1;overflow-y:auto;padding:0 8px}
+  .sidebar nav button{width:100%;text-align:left;padding:7px 12px;border-radius:6px;font:500 12px/1.4 var(--sans);color:var(--text-2);display:flex;align-items:center;gap:8px;transition:background .1s,color .1s}
+  .sidebar nav button:hover{background:var(--surface-2);color:var(--text)}
+  .sidebar nav button[aria-current]{background:var(--accent-dim);color:var(--accent)}
+  .sidebar nav button .icon{width:16px;text-align:center;font-size:13px;flex-shrink:0}
+  .sidebar .sep{height:1px;background:var(--border);margin:8px 12px}
+  .sidebar .bottom{padding:8px;border-top:1px solid var(--border)}
+  .sidebar .bottom button{width:100%;text-align:left;padding:6px 12px;border-radius:6px;font:500 11px/1.4 var(--sans);color:var(--text-3);display:flex;align-items:center;gap:8px}
+  .sidebar .bottom button:hover{color:var(--text-2);background:var(--surface-2)}
 
-  header{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-  header h1{font:600 16px/1 var(--sans);letter-spacing:-.02em;color:var(--accent)}
-  header .note{color:var(--text-3);font-size:11px;flex:1}
+  .main{margin-left:var(--sidebar-w);flex:1;min-width:0;padding:24px 28px 80px}
+  @media(max-width:768px){
+    .sidebar{transform:translateX(-100%)}
+    .sidebar.open{transform:translateX(0)}
+    .main{margin-left:0}
+    :root{--sidebar-w:260px}
+    .mob-toggle{display:flex!important}
+  }
+  .mob-toggle{display:none;position:fixed;top:8px;left:8px;z-index:11;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:16px}
 
-  .nav{display:flex;gap:1px;margin:0 0 20px;background:var(--border);border-radius:8px;overflow:hidden}
-  .nav button{flex:1;padding:7px 0;font:500 12px var(--sans);color:var(--text-3);background:var(--surface);transition:color .1s,background .1s}
-  .nav button:hover{color:var(--text-2)}
-  .nav button[aria-current]{color:var(--accent);background:var(--surface-2)}
+  .page-header{display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+  .page-header h2{font:600 18px/1.2 var(--sans);letter-spacing:-.02em;flex:1}
+  .page-header .subtitle{color:var(--text-3);font-size:11px}
 
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px}
   .label{font:600 9px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
   .hint{color:var(--text-3);font-size:11px;margin-bottom:10px}
 
-  .inp{width:100%;padding:7px 10px;border-radius:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);outline:none;font:12px var(--mono)}
-  .inp:focus{border-color:rgba(94,224,200,.35)}
+  .inp{width:100%;padding:7px 10px;border-radius:6px;background:rgba(128,128,128,.08);border:1px solid var(--border);color:var(--text);outline:none;font:12px var(--mono)}
+  .inp:focus{border-color:var(--accent-2)}
   .inp::placeholder{color:var(--text-3)}
   textarea.inp{resize:vertical}
   select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='%234e5364'%3E%3Cpath d='M0 0l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:26px}
 
-  .btn{padding:5px 12px;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border);font:500 11px var(--sans);transition:background .1s}
-  .btn:hover{background:rgba(255,255,255,.1)}
+  .btn{padding:5px 12px;border-radius:6px;background:rgba(128,128,128,.08);border:1px solid var(--border);font:500 11px var(--sans);transition:background .1s}
+  .btn:hover{background:rgba(128,128,128,.15)}
   .btn.primary{background:var(--accent);color:#061210;border-color:transparent;font-weight:600}
-  .btn.primary:hover{background:#74ebd5}
+  .btn.primary:hover{opacity:.9}
   .btn.danger{color:var(--rose);border-color:rgba(239,95,123,.2)}
   .btn.danger:hover{background:rgba(239,95,123,.06)}
   .btn:disabled{opacity:.35;cursor:not-allowed}
@@ -56,7 +79,7 @@
   .err{color:var(--rose);font-size:11px;min-height:16px;margin-top:6px}
 
   .item{display:flex;gap:10px;align-items:center;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;margin-top:6px;font-size:12px}
-  .item:hover{border-color:rgba(255,255,255,.1)}
+  .item:hover{border-color:var(--border-2)}
   .item b{font-weight:500}
   .tag{font:600 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:3px 6px;border-radius:4px;background:var(--accent-dim);color:var(--accent)}
 
@@ -70,242 +93,113 @@
   table{width:100%;border-collapse:collapse;font-size:11px}
   th{text-align:left;font:500 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);padding:0 8px 6px 0}
   td{padding:5px 8px 5px 0;border-top:1px solid var(--border)}
-  tr:hover td{background:rgba(255,255,255,.02)}
+  tr:hover td{background:rgba(128,128,128,.03)}
 
   .bars{display:flex;flex-direction:column;gap:8px}
   .bar-row{display:flex;align-items:center;gap:10px}
   .bar-label{width:100px;flex-shrink:0;font-size:11px;color:var(--text-2)}
-  .bar-track{flex:1;height:6px;border-radius:4px;background:rgba(255,255,255,.05);overflow:hidden}
+  .bar-track{flex:1;height:6px;border-radius:4px;background:rgba(128,128,128,.08);overflow:hidden}
   .bar-fill{height:100%;border-radius:4px;transition:width .3s}
   .bar-value{width:50px;flex-shrink:0;text-align:right;font-size:12px}
-
-  .probe{margin-top:4px;font-size:10px}
-
-  .turn{margin-top:14px}.turn:first-child{margin-top:0}
-  .who{font:500 8px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:4px}
-  .bubble{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;font-family:var(--sans)}
-  .turn.you .bubble{background:rgba(94,224,200,.04);border-color:rgba(94,224,200,.1)}
-  .turn.trouble .bubble{border-color:rgba(239,95,123,.2);color:var(--text-2)}
-  .turn .meta{margin-top:4px;display:flex;flex-wrap:wrap;gap:3px 10px;font-size:10px}
-
-  [hidden]{display:none!important}
 
   .health-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
   .health-dot.green{background:var(--good)}.health-dot.amber{background:var(--amber)}.health-dot.red{background:var(--rose)}
   .countdown{font-variant-numeric:tabular-nums;color:var(--amber);font-size:11px}
-  .freshness{font-size:9px;color:var(--text-3)}
   .latency-bar{display:flex;align-items:center;gap:8px;margin-top:6px}
   .latency-bar .lb{width:28px;flex-shrink:0;font:500 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
-  .latency-bar .track{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.04);overflow:hidden}
+  .latency-bar .track{flex:1;height:5px;border-radius:3px;background:rgba(128,128,128,.06);overflow:hidden}
   .latency-bar .fill{height:100%;border-radius:3px;transition:width .3s}
   .latency-bar .ms{width:55px;flex-shrink:0;text-align:right;font-size:11px}
   .refresh-row{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-bottom:12px;font-size:10px}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
   .spark{display:inline-flex;gap:1px;align-items:flex-end;height:18px;vertical-align:middle}
   .spark i{display:block;width:2px;min-height:1px;border-radius:1px;background:var(--accent);opacity:.6}
   .error-row{padding:6px 10px;margin-top:4px;background:rgba(239,95,123,.04);border:1px solid rgba(239,95,123,.1);border-radius:6px;font-size:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .error-row .er-time{color:var(--text-3)}.error-row .er-code{color:var(--rose)}.error-row .er-key{color:var(--text-2)}
   .sec{font-size:10px;color:var(--text-3);margin:14px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+  .probe{margin-top:4px;font-size:10px}
+
+  .metric-card{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;text-align:center}
+  .metric-card .k{font:500 8px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+  .metric-card .v{font:600 22px/1.3 var(--mono);margin-top:6px}
+  .metric-card .sub{font-size:10px;color:var(--text-3);margin-top:2px}
+  .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+
+  .filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+  .filter-bar .inp{width:auto;min-width:120px;font-size:11px;padding:5px 8px}
+  .filter-bar select.inp{min-width:100px}
+  .pagination{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:12px;font-size:11px}
+
+  .turn{margin-top:14px}.turn:first-child{margin-top:0}
+  .who{font:500 8px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:4px}
+  .bubble{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;font-family:var(--sans)}
+  .turn.you .bubble{background:var(--accent-dim);border-color:var(--accent-2)}
+  .turn.trouble .bubble{border-color:rgba(239,95,123,.2);color:var(--text-2)}
+  .turn .meta{margin-top:4px;display:flex;flex-wrap:wrap;gap:3px 10px;font-size:10px}
+
+  [hidden]{display:none!important}
 </style>
 
-<div class="wrap">
-  <header>
-    <h1>llm-gateway</h1>
-    <span class="note" id="note"></span>
-    <button class="btn" id="lock" hidden style="font-size:10px">Lock</button>
-  </header>
-
-  <nav class="nav">
-    <button data-view="console">Keys</button>
-    <button data-view="monitor">Monitor</button>
-    <button data-view="chat">Chat</button>
-    <button data-view="insights">Insights</button>
+<button class="mob-toggle" id="mobToggle">&#9776;</button>
+<aside class="sidebar" id="sidebar">
+  <div class="logo">llm-gateway</div>
+  <nav id="sideNav">
+    <button data-page="dashboard"><span class="icon">&#9632;</span>Dashboard</button>
+    <button data-page="monitor"><span class="icon">&#9673;</span>Monitoring</button>
+    <button data-page="requests"><span class="icon">&#9776;</span>Requests</button>
+    <div class="sep"></div>
+    <button data-page="keys"><span class="icon">&#9899;</span>Keys</button>
+    <button data-page="providers"><span class="icon">&#9881;</span>Providers</button>
+    <button data-page="analytics"><span class="icon">&#9830;</span>Analytics</button>
+    <button data-page="limits"><span class="icon">&#8644;</span>Rate Limits</button>
+    <div class="sep"></div>
+    <button data-page="apps"><span class="icon">&#9635;</span>Applications</button>
+    <button data-page="routing"><span class="icon">&#8634;</span>Routing</button>
+    <button data-page="alerts"><span class="icon">&#9888;</span>Alerts</button>
+    <div class="sep"></div>
+    <button data-page="chat"><span class="icon">&#9993;</span>Chat</button>
+    <button data-page="settings"><span class="icon">&#9881;</span>Settings</button>
   </nav>
+  <div class="bottom">
+    <button id="lockBtn">&#128274; Lock</button>
+  </div>
+</aside>
 
-  <!-- ── keys ────────────────────────────────────────────────────────────── -->
-  <div id="view-console" hidden>
-    <div id="gate" hidden>
-      <div class="gate">
-        <p class="hint" style="margin-bottom:10px">Admin token required.</p>
-        <input id="tok" class="inp" type="password" placeholder="Token" autocomplete="off">
-        <div class="err" id="gateErr"></div>
-        <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
-      </div>
-    </div>
-    <div id="app" hidden>
-      <div class="card">
-        <p class="label">Add keys</p>
-        <div class="row" style="margin-bottom:6px">
-          <select id="keyProvider" class="inp grow"></select>
-        </div>
-        <textarea id="keyInput" class="inp" rows="3" spellcheck="false" placeholder="Paste keys here"></textarea>
-        <div class="row" style="margin-top:6px">
-          <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
-          <button class="btn primary" id="save">Save</button>
-        </div>
-        <div id="saveOut" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <p class="label">Providers</p>
-        <div id="providerList"></div>
-      </div>
-
-      <div class="card">
-        <p class="label">Models</p>
-        <div id="models"></div>
-      </div>
-
-      <div class="card">
-        <p class="label">Rotation queue</p>
-        <div id="keys"></div>
-      </div>
-
-      <div class="card">
-        <p class="label">Clients</p>
-        <div class="row">
-          <input id="clientName" class="inp grow" placeholder="Name" autocomplete="off">
-          <button class="btn" id="mkClient">Issue</button>
-        </div>
-        <div id="clientOut" style="margin-top:8px"></div>
-        <div id="clients"></div>
-      </div>
-
-      <div class="card">
-        <p class="label">Usage</p>
-        <div class="grid" id="summary"></div>
-        <p class="sec">By provider</p>
-        <div style="overflow-x:auto"><table id="byProvider"></table></div>
-        <p class="sec">By key</p>
-        <div style="overflow-x:auto"><table id="byKey"></table></div>
-        <p class="sec">Recent</p>
-        <div style="overflow-x:auto"><table id="recent"></table></div>
-      </div>
+<main class="main">
+  <div id="gate" hidden>
+    <div class="gate">
+      <p class="hint" style="margin-bottom:10px">Admin token required.</p>
+      <input id="tok" class="inp" type="password" placeholder="Token" autocomplete="off">
+      <div class="err" id="gateErr"></div>
+      <button class="btn primary" id="unlock" style="width:100%;margin-top:8px">Unlock</button>
     </div>
   </div>
 
-  <!-- ── monitor ─────────────────────────────────────────────────────────── -->
-  <div id="view-monitor" hidden>
-    <div id="monitorLocked" hidden>
-      <div class="card">
-        <p class="hint">Unlock on the Keys tab first.</p>
-        <button class="btn primary" id="goUnlockMon">Go to Keys</button>
-      </div>
-    </div>
-    <div id="monitorApp" hidden>
-      <div class="refresh-row">
-        <span class="dim" id="monAutoLabel"></span>
-        <button class="btn" id="monRefresh" style="font-size:10px;padding:3px 8px">Refresh</button>
-        <label class="dim" style="display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" id="monAutoToggle" checked> Auto 30s
-        </label>
-      </div>
-      <div class="card">
-        <p class="label">Health</p>
-        <div class="grid" id="monHealth"></div>
-      </div>
-      <div class="card">
-        <p class="label">Latency <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h</span></p>
-        <div class="grid" id="monLatencyGrid" style="margin-bottom:10px"></div>
-        <div id="monLatencyBars"></div>
-        <div id="monLatencySpark" style="margin-top:8px"></div>
-      </div>
-      <div class="card">
-        <p class="label">Rate limits <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">from headers</span></p>
-        <div id="monRateLimits"></div>
-      </div>
-      <div class="card">
-        <p class="label">Reliability <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h</span></p>
-        <div class="bars" id="monReliabilityBars"></div>
-        <div class="grid" id="monReliabilitySummary" style="margin-top:12px"></div>
-      </div>
-      <div class="card">
-        <p class="label">Recent errors</p>
-        <div id="monErrors"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── chat ────────────────────────────────────────────────────────────── -->
-  <div id="view-chat" hidden>
-    <div class="card" id="chatGate" hidden>
-      <p class="label">Client token</p>
-      <p class="hint">Use a client token (not admin). Issue one on the Keys tab.</p>
-      <div class="row">
-        <input id="clientTok" class="inp grow" type="password" placeholder="lgw_…" autocomplete="off">
-        <button class="btn primary" id="chatUnlock">Connect</button>
-      </div>
-      <div class="err" id="chatGateErr"></div>
-    </div>
-    <div id="chatApp" hidden>
-      <div class="card">
-        <div class="row">
-          <input id="model" class="inp grow" spellcheck="false" autocomplete="off" placeholder="Model (blank = default)">
-          <button class="btn" id="newChat" style="font-size:10px">New</button>
-          <button class="btn danger" id="chatLock" style="font-size:10px">Disconnect</button>
-        </div>
-      </div>
-      <div class="card" id="logCard"><div id="log"></div></div>
-      <div class="card">
-        <textarea id="composer" class="inp" rows="2" spellcheck="false" placeholder="Enter sends, Shift+Enter newline"></textarea>
-        <div class="row" style="margin-top:6px">
-          <span class="dim grow" id="chatStatus"></span>
-          <button class="btn primary" id="send">Send</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── insights ────────────────────────────────────────────────────────── -->
-  <div id="view-insights" hidden>
-    <div id="insightsLocked" hidden>
-      <div class="card">
-        <p class="hint">Unlock on the Keys tab first.</p>
-        <button class="btn primary" id="goUnlock">Go to Keys</button>
-      </div>
-    </div>
-    <div id="insightsApp" hidden>
-      <div class="card">
-        <p class="label">Limits &amp; health <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h observed</span></p>
-        <div class="grid" id="limitsSummary"></div>
-        <p class="sec">By provider</p>
-        <div style="overflow-x:auto"><table id="limitsByProvider"></table></div>
-        <p class="sec">By key</p>
-        <div style="overflow-x:auto"><table id="limitsByKey"></table></div>
-      </div>
-      <div class="card">
-        <p class="label">Reliability</p>
-        <div class="bars" id="reliabilityBars"></div>
-        <div class="grid" id="reliabilitySummary" style="margin-top:12px"></div>
-        <p class="sec">By provider</p>
-        <div style="overflow-x:auto"><table id="reliabilityByProvider"></table></div>
-      </div>
-      <div class="card">
-        <p class="label">AI analysis</p>
-        <button class="btn primary" id="genInsights">Analyze</button>
-        <div id="insightsOut" style="margin-top:10px"></div>
-      </div>
-      <div class="card">
-        <p class="label">Ask about your data</p>
-        <div id="dataChatLog"></div>
-        <div class="row" style="margin-top:8px">
-          <input id="dataChatInput" class="inp grow" autocomplete="off" placeholder="Which provider failed the most?">
-          <button class="btn primary" id="dataChatSend">Ask</button>
-        </div>
-        <div class="dim" id="dataChatStatus" style="margin-top:6px"></div>
-      </div>
-    </div>
-  </div>
-</div>
+  <!-- ── pages ── -->
+  <div id="page-dashboard" class="page" hidden></div>
+  <div id="page-monitor" class="page" hidden></div>
+  <div id="page-requests" class="page" hidden></div>
+  <div id="page-keys" class="page" hidden></div>
+  <div id="page-providers" class="page" hidden></div>
+  <div id="page-analytics" class="page" hidden></div>
+  <div id="page-limits" class="page" hidden></div>
+  <div id="page-apps" class="page" hidden></div>
+  <div id="page-routing" class="page" hidden></div>
+  <div id="page-alerts" class="page" hidden></div>
+  <div id="page-chat" class="page" hidden></div>
+  <div id="page-settings" class="page" hidden></div>
+</main>
 
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
+  const $$ = (s) => document.querySelectorAll(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const when = (s) => String(s ?? "").slice(0, 16).replace("T", " ");
+
   let token = localStorage.getItem("gw.token") || "";
+  let providers = [];
 
   function ago(isoStr) {
+    if (!isoStr) return "never";
     const diff = Date.now() - Date.parse(isoStr);
     if (diff < 0) return "just now";
     if (diff < 60_000) return Math.floor(diff / 1000) + "s ago";
@@ -317,43 +211,13 @@
     if (ms <= 0) return "now";
     const s = Math.floor(ms / 1000);
     if (s < 60) return s + "s";
-    const m = Math.floor(s / 60);
-    const rs = s % 60;
+    const m = Math.floor(s / 60), rs = s % 60;
     if (m < 60) return m + "m " + (rs ? rs + "s" : "");
-    const h = Math.floor(m / 60);
-    const rm = m % 60;
-    return h + "h " + (rm ? rm + "m" : "");
+    return Math.floor(m / 60) + "h " + (m % 60 ? (m % 60) + "m" : "");
   }
-
-  let providers = [];
+  function fmtMs(ms) { return ms === null || ms === undefined ? "—" : ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s"; }
+  function pct(n, d) { return d ? (100 * n / d) : 0; }
   function providerLabel(id) { return providers.find((p) => p.id === id)?.label || id; }
-  async function loadProviders() {
-    try { const r = await fetch("/v1/providers"); providers = (await r.json()).providers || []; } catch { providers = []; }
-    $("#keyProvider").innerHTML = providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("");
-    updateKeyPlaceholder();
-  }
-  function updateKeyPlaceholder() {
-    const hint = providers.find((p) => p.id === $("#keyProvider").value)?.keyHint || "";
-    $("#keyInput").placeholder = hint ? `${hint}\n${hint}` : "Paste keys here";
-  }
-  loadProviders();
-
-  async function drawProviders() {
-    await loadProviders();
-    $("#providerList").innerHTML = providers.map((p) => `
-      <div class="item">
-        <div class="grow"><b>${esc(p.label)}</b>
-          ${p.paused ? '<span class="tag" style="margin-left:6px;background:rgba(239,95,123,.1);color:var(--rose)">paused</span>' : ""}
-        </div>
-        <button class="btn" data-provider-toggle="${esc(p.id)}" data-paused="${p.paused}" style="font-size:10px">${p.paused ? "Resume" : "Pause"}</button>
-      </div>`).join("");
-    document.querySelectorAll("[data-provider-toggle]").forEach((b) => (b.onclick = async () => {
-      const id = b.dataset.providerToggle, wasPaused = b.dataset.paused === "true";
-      b.disabled = true;
-      try { await api("/v1/providers/" + id + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" }); await load(); }
-      catch (e) { alert(e.message); b.disabled = false; }
-    }));
-  }
 
   async function api(path, options = {}) {
     const res = await fetch(path, { ...options, headers: { Authorization: "Bearer " + token, ...(options.body ? {"Content-Type":"application/json"} : {}) } });
@@ -364,288 +228,154 @@
     return body;
   }
 
-  const VIEWS = ["console", "monitor", "chat", "insights"];
-  let view = "console";
-  function show(next, push) {
-    view = VIEWS.includes(next) ? next : "console";
-    VIEWS.forEach((v) => { const el = document.getElementById("view-" + v); if (el) el.hidden = v !== view; });
-    document.querySelectorAll("[data-view]").forEach((b) => { if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
-    const paths = { console: "/", monitor: "/monitor", chat: "/chat", insights: "/insights" };
-    if (push) history.pushState({}, "", paths[view] || "/");
-    if (view === "chat") drawChat();
-    if (view === "insights") drawInsights();
-    if (view === "monitor") drawMonitor();
+  async function loadProviders() {
+    try { const r = await fetch("/v1/providers"); providers = (await r.json()).providers || []; } catch { providers = []; }
   }
-  document.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => show(b.dataset.view, true)));
-  window.onpopstate = () => {
-    const p = location.pathname.replace(/\/+$/, "");
-    show(p === "/chat" ? "chat" : p === "/insights" ? "insights" : p === "/monitor" ? "monitor" : "console", false);
-  };
 
+  // ── auth ──────────────────────────────────────────────────────────────
   function lock() {
     token = ""; localStorage.removeItem("gw.token");
-    $("#app").hidden = true; $("#gate").hidden = false; $("#lock").hidden = true;
-    $("#insightsApp").hidden = true; $("#insightsLocked").hidden = false;
-    $("#monitorApp").hidden = true; $("#monitorLocked").hidden = false;
+    $("#gate").hidden = false;
+    $$(".page").forEach((p) => (p.hidden = true));
     stopMonitorTimer();
   }
-  async function unlock(candidate) {
+  async function tryUnlock(candidate) {
     token = (candidate || "").trim(); if (!token) return;
     $("#gateErr").textContent = "";
     try {
       await api("/v1/keys");
       localStorage.setItem("gw.token", token);
-      $("#gate").hidden = true; $("#app").hidden = false; $("#lock").hidden = false;
-      await load();
+      $("#gate").hidden = true;
+      await loadProviders();
+      showPage(currentPage, false);
     } catch (e) { token = ""; $("#gateErr").textContent = e.message === "unauthorized" ? "Rejected." : e.message; }
   }
-  $("#unlock").onclick = () => unlock($("#tok").value);
-  $("#tok").onkeydown = (e) => { if (e.key === "Enter") unlock($("#tok").value); };
-  $("#lock").onclick = lock;
+  $("#unlock").onclick = () => tryUnlock($("#tok").value);
+  $("#tok").onkeydown = (e) => { if (e.key === "Enter") tryUnlock($("#tok").value); };
+  $("#lockBtn").onclick = lock;
+  $("#mobToggle").onclick = () => $("#sidebar").classList.toggle("open");
 
-  async function drawModels() {
-    const m = await api("/v1/models");
-    $("#models").innerHTML = m.models.map((x) => `
-      <div class="item" style="flex-direction:column;align-items:stretch;gap:6px">
-        <div class="row"><b>${esc(x.label)}</b><span class="dim" style="margin-left:auto">using ${esc(x.effective)}${x.override ? "" : " (default)"}</span></div>
-        <div class="row">
-          <input class="inp grow" data-model="${esc(x.provider)}" placeholder="${esc(x.registryDefault)}" value="${esc(x.override || "")}">
-          <button class="btn" data-model-save="${esc(x.provider)}" style="font-size:10px">Save</button>
-        </div>
-        <div class="probe" data-model-out="${esc(x.provider)}" hidden></div>
-      </div>`).join("");
-    document.querySelectorAll("[data-model-save]").forEach((b) => (b.onclick = async () => {
-      const id = b.dataset.modelSave, input = document.querySelector('[data-model="' + id + '"]'), out = document.querySelector('[data-model-out="' + id + '"]');
-      b.disabled = true;
-      try { await api("/v1/models", { method: "POST", body: JSON.stringify({ provider: id, model: input.value.trim() }) }); await drawModels(); }
-      catch (e) { out.hidden = false; out.className = "probe bad"; out.textContent = e.message; b.disabled = false; }
-    }));
+  // ── navigation ────────────────────────────────────────────────────────
+  const PAGES = ["dashboard","monitor","requests","keys","providers","analytics","limits","apps","routing","alerts","chat","settings"];
+  const PATH_MAP = { "/": "dashboard", "/dashboard": "dashboard", "/monitor": "monitor", "/requests": "requests",
+    "/keys": "keys", "/providers": "providers", "/analytics": "analytics", "/limits": "limits",
+    "/apps": "apps", "/routing": "routing", "/alerts": "alerts", "/chat": "chat", "/settings": "settings",
+    "/insights": "settings" };
+  let currentPage = "dashboard";
+
+  function showPage(page, push) {
+    if (!PAGES.includes(page)) page = "dashboard";
+    currentPage = page;
+    if (!token) { $("#gate").hidden = false; return; }
+    $$(".page").forEach((p) => (p.hidden = true));
+    const el = $("#page-" + page);
+    if (el) el.hidden = false;
+    $$("#sideNav button").forEach((b) => { b.dataset.page === page ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"); });
+    const paths = { dashboard: "/dashboard", monitor: "/monitor", requests: "/requests", keys: "/keys",
+      providers: "/providers", analytics: "/analytics", limits: "/limits", apps: "/apps",
+      routing: "/routing", alerts: "/alerts", chat: "/chat", settings: "/settings" };
+    if (push) history.pushState({}, "", paths[page] || "/");
+    $("#sidebar").classList.remove("open");
+    pageLoaders[page]?.();
   }
-
-  async function load() {
-    const k = await api("/v1/keys");
-    const nowIso = new Date().toISOString();
-    $("#note").textContent = k.note;
-    $("#keys").innerHTML = k.queue.length ? k.queue.map((x) => {
-      const stillLimited = x.rateLimitedUntil && x.rateLimitedUntil > nowIso;
-      const statusColor = x.benched ? "var(--rose)" : x.paused || x.providerPaused ? "var(--rose)" : stillLimited ? "var(--amber)" : x.next ? "var(--accent)" : "var(--text-3)";
-      return `
-      <div class="item">
-        <span style="color:${statusColor}">${x.next ? "&#9654;" : "&#9679;"}</span>
-        <div class="grow">
-          <div class="row" style="flex-wrap:wrap;gap:4px 6px">
-            <b>${esc(x.masked)}</b>
-            <span class="tag">${esc(providerLabel(x.provider))}</span>
-            ${x.next ? '<span class="tag">next</span>' : ""}
-            ${x.benched ? '<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">benched</span>' : ""}
-            ${x.paused ? '<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">paused</span>' : ""}
-          </div>
-          <div class="dim" style="margin-top:3px">
-            ${x.uses} call${x.uses === 1 ? "" : "s"}${x.totalFailures ? " · " + x.totalFailures + " fail" : ""}${x.label ? " · " + esc(x.label) : ""}${x.lastRateLimitedAt ? ' · <span class="warn">limited ' + esc(ago(x.lastRateLimitedAt)) + "</span>" : ""}${stillLimited ? ' · <span class="warn countdown" data-reset="' + esc(x.rateLimitedUntil) + '">resets ' + fmtDuration(Date.parse(x.rateLimitedUntil) - Date.now()) + "</span>" : ""}
-          </div>
-          ${x.benched ? '<div class="bad" style="margin-top:2px;font-size:10px">benched' + (x.benchedReason ? ": " + esc(x.benchedReason.slice(0, 100)) : "") + "</div>" : ""}
-          ${!x.paused && x.providerPaused ? '<div class="warn" style="margin-top:2px;font-size:10px">provider paused</div>' : ""}
-          <div class="probe" data-probe="${x.id}" hidden></div>
-        </div>
-        ${x.benched ? `<button class="btn" data-unbench="${x.id}" style="font-size:10px">Un-bench</button>` : ""}
-        <button class="btn" data-key-toggle="${x.id}" data-paused="${x.paused}" style="font-size:10px">${x.paused ? "Resume" : "Pause"}</button>
-        <button class="btn" data-test="${x.id}" style="font-size:10px">Test</button>
-        <button class="btn danger" data-del="${x.id}" style="font-size:10px">Del</button>
-      </div>`;
-    }).join("") : `<p class="dim" style="padding:8px 0">No keys yet.</p>`;
-
-    document.querySelectorAll("[data-key-toggle]").forEach((b) => (b.onclick = async () => {
-      const wasPaused = b.dataset.paused === "true"; b.disabled = true;
-      try { await api("/v1/keys/" + b.dataset.keyToggle + "/" + (wasPaused ? "resume" : "pause"), { method: "POST" }); await load(); }
-      catch (e) { alert(e.message); b.disabled = false; }
-    }));
-    document.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
-      const out = document.querySelector('[data-probe="' + b.dataset.test + '"]');
-      b.disabled = true; out.hidden = false; out.className = "probe dim"; out.textContent = "Testing…";
-      try {
-        const r = await api("/v1/keys/" + b.dataset.test + "/test", { method: "POST" });
-        out.className = "probe " + (r.status === "live" ? "ok" : r.status === "rate_limited" ? "warn" : "bad");
-        out.textContent = (r.status === "live" ? "Live" : r.status === "rate_limited" ? "Rate limited" : "Failed") + " — " + r.message;
-      } catch (e) { out.className = "probe bad"; out.textContent = e.message; }
-      b.disabled = false;
-    }));
-    document.querySelectorAll("[data-unbench]").forEach((b) => (b.onclick = async () => {
-      b.disabled = true;
-      try { await api("/v1/keys/" + b.dataset.unbench + "/unbench", { method: "POST" }); await load(); }
-      catch (e) { alert(e.message); b.disabled = false; }
-    }));
-    document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
-      if (!confirm("Remove this key?")) return;
-      try { await api("/v1/keys/" + b.dataset.del, { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
-    }));
-
-    await drawModels();
-    await drawProviders();
-
-    const c = await api("/v1/clients");
-    $("#clients").innerHTML = c.clients.length ? c.clients.map((x) => `
-      <div class="item">
-        <div class="grow"><b>${esc(x.name)}</b>
-          <span class="dim" style="margin-left:6px">${x.calls} call${x.calls === 1 ? "" : "s"}${x.last_seen ? " · " + ago(x.last_seen) : " · never"}</span>
-        </div>
-        <button class="btn danger" data-revoke="${esc(x.name)}" style="font-size:10px">Revoke</button>
-      </div>`).join("") : `<p class="dim" style="padding:8px 0">No clients yet.</p>`;
-    document.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {
-      if (!confirm(`Revoke "${b.dataset.revoke}"?`)) return;
-      try { await api("/v1/clients/" + encodeURIComponent(b.dataset.revoke), { method: "DELETE" }); await load(); } catch (e) { alert(e.message); }
-    }));
-
-    const u = await api("/v1/usage?limit=25"), s = u.summary;
-    $("#summary").innerHTML = `
-      <div><div class="k">Calls</div><div class="v">${s.calls}</div></div>
-      <div><div class="k">OK</div><div class="v ok">${s.ok}</div></div>
-      <div><div class="k">Failed</div><div class="v ${s.calls - s.ok ? "warn" : ""}">${s.calls - s.ok}</div></div>
-      <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
-      <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
-    const rate = (c2, ok) => c2 ? Math.round((100 * ok) / c2) + "%" : "—";
-    $("#byProvider").innerHTML = s.byProvider?.length
-      ? `<tr><th>Provider</th><th>Calls</th><th>OK</th><th>In</th><th>Out</th></tr>` + s.byProvider.map((p) => `<tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.calls}</td><td class="num">${rate(p.calls, p.ok)}</td><td class="num">${p.input_tokens.toLocaleString()}</td><td class="num">${p.output_tokens.toLocaleString()}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-    $("#byKey").innerHTML = s.byKey?.length
-      ? `<tr><th>Key</th><th>Provider</th><th>Calls</th><th>OK</th><th>In</th><th>Out</th></tr>` + s.byKey.map((k2) => `<tr><td>${esc(k2.key_masked)}</td><td>${esc(providerLabel(k2.provider))}</td><td class="num">${k2.calls}</td><td class="num">${rate(k2.calls, k2.ok)}</td><td class="num">${k2.input_tokens.toLocaleString()}</td><td class="num">${k2.output_tokens.toLocaleString()}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-    $("#recent").innerHTML = u.recent.length
-      ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>` + u.recent.map((r) => `<tr><td>${esc(ago(r.at))}</td><td>${esc(r.client)}</td><td>${esc(r.model || "—")}</td><td>${esc(r.key_masked || "—")}</td><td class="${r.ok ? "ok" : "warn"}">${r.ok ? "ok" : esc((r.error || "fail").slice(0,40))}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-  }
-
-  $("#keyProvider").onchange = updateKeyPlaceholder;
-  $("#save").onclick = async () => {
-    const keys = $("#keyInput").value.trim(); if (!keys) return;
-    $("#save").disabled = true;
-    try {
-      const r = await api("/v1/keys", { method: "POST", body: JSON.stringify({ keys, label: $("#keyLabel").value.trim(), provider: $("#keyProvider").value }) });
-      $("#keyInput").value = ""; $("#keyLabel").value = "";
-      $("#saveOut").innerHTML = `<span class="ok" style="font-size:11px">Stored ${r.added.map((a) => esc(a.masked)).join(", ")}</span>` + (r.skipped.length ? `<div class="warn" style="font-size:10px;margin-top:4px">${r.skipped.map(esc).join("<br>")}</div>` : "");
-      await load();
-    } catch (e) { $("#saveOut").innerHTML = `<span class="bad" style="font-size:11px">${esc(e.message)}</span>`; }
-    $("#save").disabled = false;
-  };
-  $("#mkClient").onclick = async () => {
-    const name = $("#clientName").value.trim(); if (!name) return;
-    try {
-      const r = await api("/v1/clients", { method: "POST", body: JSON.stringify({ name }) });
-      $("#clientName").value = "";
-      $("#clientOut").innerHTML = `<div class="item" style="flex-direction:column;align-items:stretch;gap:4px">
-        <div class="dim">${esc(r.note)}</div>
-        <b style="color:var(--accent);word-break:break-all;font-size:11px">${esc(r.token)}</b>
-        <div class="row"><button class="btn" id="useTok" style="font-size:10px">Use in chat</button><button class="btn" id="copyTok" style="font-size:10px">Copy</button></div>
-      </div>`;
-      $("#copyTok").onclick = () => navigator.clipboard.writeText(r.token);
-      $("#useTok").onclick = () => { setClientToken(r.token); show("chat", true); };
-      await load();
-    } catch (e) { $("#clientOut").innerHTML = `<span class="bad" style="font-size:11px">${esc(e.message)}</span>`; }
+  $$("#sideNav button").forEach((b) => (b.onclick = () => showPage(b.dataset.page, true)));
+  window.onpopstate = () => {
+    const p = location.pathname.replace(/\/+$/, "") || "/";
+    showPage(PATH_MAP[p] || "dashboard", false);
   };
 
-  // ── chat ──────────────────────────────────────────────────────────────────
-  let clientToken = localStorage.getItem("gw.client") || "", turns = [], busy = false;
-  $("#model").value = localStorage.getItem("gw.model") || "";
-  $("#model").oninput = () => localStorage.setItem("gw.model", $("#model").value.trim());
+  // ── page loaders ──────────────────────────────────────────────────────
+  const pageLoaders = {};
 
-  function setClientToken(next) {
-    clientToken = (next || "").trim();
-    if (clientToken) localStorage.setItem("gw.client", clientToken); else localStorage.removeItem("gw.client");
-    drawChat();
-  }
-  function drawChat() {
-    $("#chatGate").hidden = !!clientToken; $("#chatApp").hidden = !clientToken;
-    if (!clientToken) { $("#clientTok").value = ""; return; }
-    $("#logCard").hidden = turns.length === 0;
-    $("#log").innerHTML = turns.map((t) => `
-      <div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}">
-        <div class="who">${t.role === "user" ? "You" : t.trouble ? "Gateway" : "Assistant"}</div>
-        <div class="bubble">${esc(t.content)}</div>
-        ${t.model || t.key ? `<div class="meta dim">${t.model ? "<span>" + esc(t.model) + "</span>" : ""}${t.key ? "<span>key " + esc(t.key) + "</span>" : ""}${t.tried > 1 ? "<span>" + t.tried + " tried</span>" : ""}</div>` : ""}
-      </div>`).join("");
-    $("#log").scrollIntoView({ block: "end" });
-  }
-  function conversation() { return turns.filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content })); }
-  function explain(status, payload) {
-    const code = payload?.error?.code, message = payload?.error?.message || "";
-    if (status === 401) return "Client token rejected.";
-    if (code === "rate_limited") { const at = payload?.error?.reset_at; return "All keys rate limited" + (at ? " until " + when(at) : "") + ". Add more keys or wait."; }
-    if (code === "no_keys_configured") return "No keys in rotation.";
-    if (code === "bad_model_output") return "Model returned nothing usable. Try again.";
-    if (code === "validation_failed") return message;
-    if (code === "upstream_error") return message;
-    return message || ("HTTP " + status);
-  }
-  function setBusy(next) { busy = next; $("#send").disabled = next; $("#chatStatus").textContent = next ? "Waiting…" : ""; }
-
-  async function send() {
-    if (busy) return;
-    const text = $("#composer").value.trim(); if (!text || !clientToken) return;
-    turns.push({ role: "user", content: text }); $("#composer").value = ""; drawChat(); setBusy(true);
-    const body = { messages: conversation(), stream: true };
-    const model = $("#model").value.trim(); if (model) body.model = model;
-    const turn = { role: "assistant", content: "" }; let started = false;
+  // ── DASHBOARD ─────────────────────────────────────────────────────────
+  pageLoaders.dashboard = async () => {
+    const el = $("#page-dashboard");
     try {
-      const res = await fetch("/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + clientToken, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (!res.ok || !res.body) {
-        const text2 = await res.text(); let payload = null; try { payload = text2 ? JSON.parse(text2) : null; } catch {}
-        turns.push({ role: "assistant", trouble: true, content: explain(res.status, payload) });
-        if (res.status === 401) { setBusy(false); setClientToken(""); $("#chatGateErr").textContent = "Token rejected."; drawChat(); return; }
-      } else {
-        turns.push(turn); started = true; drawChat();
-        const bubble = $("#log").lastElementChild?.querySelector(".bubble");
-        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader(); let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read(); if (done) break;
-          buffer += value; const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            const trimmed = line.trim(); if (!trimmed.startsWith("data:")) continue;
-            const pl = trimmed.slice(5).trim(); if (pl === "[DONE]") continue;
-            let json; try { json = JSON.parse(pl); } catch { continue; }
-            if (json.x_gateway) { turn.model = json.model; turn.key = json.x_gateway.key; turn.tried = json.x_gateway.keys_tried?.length ?? 1; }
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) { turn.content += delta; if (bubble) { bubble.textContent = turn.content; $("#log").scrollIntoView({ block: "end" }); } }
-          }
-        }
-        if (!turn.content) { turn.trouble = true; turn.content = explain(502, { error: { code: "bad_model_output" } }); }
-        drawChat();
-      }
-    } catch (e) {
-      if (started) { turn.trouble = true; turn.content += (turn.content ? "\n\n" : "") + "[lost: " + e.message + "]"; }
-      else turns.push({ role: "assistant", trouble: true, content: "Unreachable: " + e.message });
-      drawChat();
-    }
-    setBusy(false);
-  }
-  $("#chatUnlock").onclick = () => { $("#chatGateErr").textContent = ""; setClientToken($("#clientTok").value); };
-  $("#clientTok").onkeydown = (e) => { if (e.key === "Enter") $("#chatUnlock").click(); };
-  $("#chatLock").onclick = () => setClientToken("");
-  $("#newChat").onclick = () => { turns = []; drawChat(); };
-  $("#send").onclick = send;
-  $("#composer").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+      const d = await api("/v1/dashboard");
+      const w5 = d.windows.find((w) => w.label === "5m") || {};
+      const w1 = d.windows.find((w) => w.label === "1h") || {};
+      const w24 = d.windows.find((w) => w.label === "24h") || {};
+      const healthColor = d.keys.active > 0 ? "green" : (d.keys.limited > 0 || d.keys.benched > 0) ? "amber" : "red";
+      const healthWord = d.keys.active > 0 ? "Healthy" : (d.keys.limited > 0 || d.keys.benched > 0) ? "Degraded" : d.keys.total === 0 ? "No keys" : "Down";
+      el.innerHTML = `
+        <div class="page-header"><h2>Dashboard</h2></div>
+        <div class="metrics-grid">
+          <div class="metric-card"><div class="k">Status</div><div class="v"><span class="health-dot ${healthColor}"></span>${healthWord}</div></div>
+          <div class="metric-card"><div class="k">5m Requests</div><div class="v">${w5.requests ?? 0}</div><div class="sub">${(w5.errorRate ? (w5.errorRate * 100).toFixed(1) + "% errors" : "0% errors")}</div></div>
+          <div class="metric-card"><div class="k">1h Requests</div><div class="v">${w1.requests ?? 0}</div><div class="sub">${(w1.errorRate ? (w1.errorRate * 100).toFixed(1) + "% errors" : "0% errors")}</div></div>
+          <div class="metric-card"><div class="k">24h Requests</div><div class="v">${w24.requests ?? 0}</div><div class="sub">${(w24.errorRate ? (w24.errorRate * 100).toFixed(1) + "% errors" : "0% errors")}</div></div>
+          <div class="metric-card"><div class="k">P50 Latency</div><div class="v">${fmtMs(d.latency.p50)}</div></div>
+          <div class="metric-card"><div class="k">P95 Latency</div><div class="v ${(d.latency.p95||0)>5000?"warn":""}">${fmtMs(d.latency.p95)}</div></div>
+          <div class="metric-card"><div class="k">Keys</div><div class="v">${d.keys.total}</div><div class="sub">${d.keys.active} active, ${d.keys.limited} limited</div></div>
+          <div class="metric-card"><div class="k">24h Tokens</div><div class="v">${((d.tokens.inputLast24h + d.tokens.outputLast24h) / 1000).toFixed(1)}k</div><div class="sub">${(d.tokens.inputLast24h/1000).toFixed(1)}k in / ${(d.tokens.outputLast24h/1000).toFixed(1)}k out</div></div>
+        </div>
+        <div class="card"><p class="label">Quick links</p>
+          <div class="row" style="flex-wrap:wrap;gap:6px">
+            <button class="btn" onclick="showPage('monitor',true)">Open Monitor</button>
+            <button class="btn" onclick="showPage('requests',true)">View Requests</button>
+            <button class="btn" onclick="showPage('keys',true)">Manage Keys</button>
+            <button class="btn" onclick="showPage('analytics',true)">Cost Analytics</button>
+          </div>
+        </div>`;
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  };
+  window.showPage = showPage;
 
-  // ── monitor ──────────────────────────────────────────────────────────────
+  // ── MONITOR ───────────────────────────────────────────────────────────
   let monTimer = null, monCountdownTimer = null;
   function stopMonitorTimer() { clearInterval(monTimer); monTimer = null; clearInterval(monCountdownTimer); monCountdownTimer = null; }
   function startMonitorTimer() {
     stopMonitorTimer();
-    if ($("#monAutoToggle").checked) monTimer = setInterval(() => { if (view === "monitor") refreshMonitor(); }, 30_000);
+    const chk = $("#monAutoToggle");
+    if (chk && chk.checked) monTimer = setInterval(() => { if (currentPage === "monitor") refreshMonitor(); }, 30_000);
     monCountdownTimer = setInterval(tickCountdowns, 1000);
   }
-  async function drawMonitor() {
-    $("#monitorLocked").hidden = !!token; $("#monitorApp").hidden = !token;
-    if (!token) return; startMonitorTimer(); await refreshMonitor();
+  function tickCountdowns() {
+    const nowMs = Date.now();
+    $$("[data-reset]").forEach((el) => {
+      const diff = Date.parse(el.dataset.reset) - nowMs;
+      if (diff <= 0) { if (el.classList.contains("countdown")) { el.className = "ok"; el.textContent = "reset"; } }
+      else { const pfx = el.textContent.includes("429") ? "429 clears " : "resets "; el.textContent = pfx + fmtDuration(diff); }
+    });
   }
-  $("#goUnlockMon").onclick = () => show("console", true);
-  $("#monRefresh").onclick = () => refreshMonitor();
-  $("#monAutoToggle").onchange = () => startMonitorTimer();
+
+  pageLoaders.monitor = async () => {
+    const el = $("#page-monitor");
+    el.innerHTML = `
+      <div class="page-header"><h2>Monitoring</h2>
+        <div class="refresh-row" style="margin:0">
+          <span class="dim" id="monAutoLabel"></span>
+          <button class="btn" id="monRefresh" style="font-size:10px;padding:3px 8px">Refresh</button>
+          <label class="dim" style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="monAutoToggle" checked> Auto 30s
+          </label>
+        </div>
+      </div>
+      <div class="card"><p class="label">Health</p><div class="grid" id="monHealth"></div></div>
+      <div class="card"><p class="label">Latency <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">24h</span></p>
+        <div class="grid" id="monLatencyGrid" style="margin-bottom:10px"></div>
+        <div id="monLatencyBars"></div>
+        <div id="monLatencySpark" style="margin-top:8px"></div>
+      </div>
+      <div class="card"><p class="label">Rate limits <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">from headers</span></p><div id="monRateLimits"></div></div>
+      <div class="card"><p class="label">Reliability</p>
+        <div class="bars" id="monReliabilityBars"></div>
+        <div class="grid" id="monReliabilitySummary" style="margin-top:12px"></div>
+      </div>
+      <div class="card"><p class="label">Recent errors</p><div id="monErrors"></div></div>`;
+    $("#monRefresh").onclick = () => refreshMonitor();
+    $("#monAutoToggle").onchange = () => startMonitorTimer();
+    startMonitorTimer();
+    await refreshMonitor();
+  };
 
   async function refreshMonitor() {
     if (!token) return;
     try {
       const [keysData, latency, limits, reliability, usage] = await Promise.all([api("/v1/keys"), api("/v1/latency"), api("/v1/limits"), api("/v1/reliability"), api("/v1/usage?limit=50")]);
       renderHealth(keysData, limits); renderLatency(latency); renderRateLimits(keysData.queue); renderMonReliability(reliability); renderRecentErrors(usage);
-      $("#monAutoLabel").textContent = new Date().toLocaleTimeString();
-    } catch (e) { if (e.message !== "unauthorized") $("#monAutoLabel").textContent = "err: " + e.message; }
+      const lbl = $("#monAutoLabel"); if (lbl) lbl.textContent = new Date().toLocaleTimeString();
+    } catch (e) { const lbl = $("#monAutoLabel"); if (lbl && e.message !== "unauthorized") lbl.textContent = "err: " + e.message; }
   }
 
   function renderHealth(keysData, limits) {
@@ -656,166 +386,541 @@
     const color = active > 0 ? "green" : (limited > 0 || benched > 0) ? "amber" : "red";
     const word = active > 0 ? "Healthy" : (limited > 0 || benched > 0) ? "Degraded" : "Down";
     const calls24 = limits.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
-    $("#monHealth").innerHTML = `
+    const el = $("#monHealth"); if (!el) return;
+    el.innerHTML = `
       <div><div class="k">Status</div><div class="v"><span class="health-dot ${color}"></span>${word}</div></div>
       <div><div class="k">Keys</div><div class="v">${q.length}</div></div>
       <div><div class="k">Active</div><div class="v ok">${active}</div></div>
-      <div><div class="k">Limited</div><div class="v ${limited ? "warn" : ""}">${limited}</div></div>
-      <div><div class="k">Benched</div><div class="v ${benched ? "bad" : ""}">${benched}</div></div>
+      <div><div class="k">Limited</div><div class="v ${limited?"warn":""}">${limited}</div></div>
+      <div><div class="k">Benched</div><div class="v ${benched?"bad":""}">${benched}</div></div>
       <div><div class="k">24h calls</div><div class="v">${calls24}</div></div>`;
   }
 
   function renderLatency(lat) {
-    const fmt = (ms) => ms === null ? "—" : ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s";
     const maxMs = Math.max(lat.p99 || 0, 1);
-    $("#monLatencyGrid").innerHTML = `
+    const g = $("#monLatencyGrid"); if (!g) return;
+    g.innerHTML = `
       <div><div class="k">Reqs</div><div class="v">${lat.count}</div></div>
-      <div><div class="k">P50</div><div class="v">${fmt(lat.p50)}</div></div>
-      <div><div class="k">P95</div><div class="v ${(lat.p95||0)>5000?"warn":""}">${fmt(lat.p95)}</div></div>
-      <div><div class="k">P99</div><div class="v ${(lat.p99||0)>10000?"bad":""}">${fmt(lat.p99)}</div></div>`;
-    if (!lat.count) { $("#monLatencyBars").innerHTML = '<p class="dim">No data.</p>'; $("#monLatencySpark").innerHTML = ""; return; }
-    const pct = (ms) => Math.min(100, Math.max(2, (ms / maxMs) * 100));
+      <div><div class="k">P50</div><div class="v">${fmtMs(lat.p50)}</div></div>
+      <div><div class="k">P95</div><div class="v ${(lat.p95||0)>5000?"warn":""}">${fmtMs(lat.p95)}</div></div>
+      <div><div class="k">P99</div><div class="v ${(lat.p99||0)>10000?"bad":""}">${fmtMs(lat.p99)}</div></div>`;
+    const bars = $("#monLatencyBars"); if (!bars) return;
+    if (!lat.count) { bars.innerHTML = '<p class="dim">No data.</p>'; const sp = $("#monLatencySpark"); if (sp) sp.innerHTML = ""; return; }
+    const pctW = (ms) => Math.min(100, Math.max(2, (ms / maxMs) * 100));
     const clr = (ms) => ms > 10000 ? "var(--rose)" : ms > 5000 ? "var(--amber)" : "var(--accent)";
-    $("#monLatencyBars").innerHTML = [{ l: "P50", ms: lat.p50 }, { l: "P95", ms: lat.p95 }, { l: "P99", ms: lat.p99 }].filter((b) => b.ms !== null).map((b) => `<div class="latency-bar"><div class="lb">${b.l}</div><div class="track"><div class="fill" style="width:${pct(b.ms).toFixed(1)}%;background:${clr(b.ms)}"></div></div><div class="ms">${fmt(b.ms)}</div></div>`).join("");
+    bars.innerHTML = [{l:"P50",ms:lat.p50},{l:"P95",ms:lat.p95},{l:"P99",ms:lat.p99}].filter((b)=>b.ms!==null).map((b)=>`<div class="latency-bar"><div class="lb">${b.l}</div><div class="track"><div class="fill" style="width:${pctW(b.ms).toFixed(1)}%;background:${clr(b.ms)}"></div></div><div class="ms">${fmtMs(b.ms)}</div></div>`).join("");
     const spark = lat.recent.slice(0, 30).reverse();
+    const sp = $("#monLatencySpark"); if (!sp) return;
     if (spark.length > 1) {
       const mx = Math.max(...spark.map((s) => s.latencyMs), 1);
-      $("#monLatencySpark").innerHTML = '<div class="dim" style="margin-bottom:3px">Recent →</div><div class="spark">' + spark.map((s) => { const h = Math.max(2, Math.round((s.latencyMs / mx) * 18)); return `<i style="height:${h}px;background:${!s.ok ? "var(--rose)" : s.latencyMs > 5000 ? "var(--amber)" : "var(--accent)"}" title="${fmt(s.latencyMs)}"></i>`; }).join("") + "</div>";
-    } else { $("#monLatencySpark").innerHTML = ""; }
+      sp.innerHTML = '<div class="dim" style="margin-bottom:3px">Recent →</div><div class="spark">' + spark.map((s) => { const h = Math.max(2, Math.round((s.latencyMs / mx) * 18)); return `<i style="height:${h}px;background:${!s.ok?"var(--rose)":s.latencyMs>5000?"var(--amber)":"var(--accent)"}" title="${fmtMs(s.latencyMs)}"></i>`; }).join("") + "</div>";
+    } else sp.innerHTML = "";
   }
 
   function renderRateLimits(queue) {
-    if (!queue.length) { $("#monRateLimits").innerHTML = '<p class="dim">No keys.</p>'; return; }
+    const el = $("#monRateLimits"); if (!el) return;
+    if (!queue.length) { el.innerHTML = '<p class="dim">No keys.</p>'; return; }
     const nowMs = Date.now();
-    $("#monRateLimits").innerHTML = queue.map((k) => {
-      const has = k.rateLimitLimit !== null || k.rateLimitRemaining !== null || k.rateLimitReset !== null;
+    el.innerHTML = queue.map((k) => {
+      const has = k.rateLimitLimit !== null || k.rateLimitRemaining !== null;
       const fresh = k.rateLimitObservedAt ? ago(k.rateLimitObservedAt) : null;
       let reset = "";
-      if (k.rateLimitReset) { const d = Date.parse(k.rateLimitReset) - nowMs; reset = d > 0 ? '<span class="countdown" data-reset="' + esc(k.rateLimitReset) + '">resets ' + fmtDuration(d) + "</span>" : '<span class="ok">reset</span>'; }
+      if (k.rateLimitReset) { const d = Date.parse(k.rateLimitReset) - nowMs; reset = d > 0 ? '<span class="countdown" data-reset="'+esc(k.rateLimitReset)+'">resets '+fmtDuration(d)+"</span>" : '<span class="ok">reset</span>'; }
       const still = k.rateLimitedUntil && Date.parse(k.rateLimitedUntil) > nowMs;
       let limited = "";
-      if (still) { const d = Date.parse(k.rateLimitedUntil) - nowMs; limited = '<span class="countdown" data-reset="' + esc(k.rateLimitedUntil) + '">429 clears ' + fmtDuration(d) + "</span>"; }
+      if (still) { const d = Date.parse(k.rateLimitedUntil) - nowMs; limited = '<span class="countdown" data-reset="'+esc(k.rateLimitedUntil)+'">429 clears '+fmtDuration(d)+"</span>"; }
       const dot = k.benched ? "red" : (k.paused || k.providerPaused) ? "red" : still ? "amber" : "green";
       let quota = "";
       if (k.rateLimitRemaining !== null && k.rateLimitLimit !== null) {
         const p = k.rateLimitLimit > 0 ? Math.round((k.rateLimitRemaining / k.rateLimitLimit) * 100) : 0;
         const c = p > 30 ? "var(--good)" : p > 10 ? "var(--amber)" : "var(--rose)";
-        quota = '<span style="color:' + c + '">' + k.rateLimitRemaining + '</span><span class="dim">/' + k.rateLimitLimit + "</span>";
-      } else if (k.rateLimitRemaining !== null) { quota = k.rateLimitRemaining + ' <span class="dim">left</span>'; }
-      else if (k.rateLimitLimit !== null) { quota = '<span class="dim">' + k.rateLimitLimit + " limit</span>"; }
+        quota = '<span style="color:'+c+'">'+k.rateLimitRemaining+'</span><span class="dim">/'+k.rateLimitLimit+"</span>";
+      } else if (k.rateLimitRemaining !== null) { quota = k.rateLimitRemaining+' <span class="dim">left</span>'; }
+      else if (k.rateLimitLimit !== null) { quota = '<span class="dim">'+k.rateLimitLimit+" limit</span>"; }
       return `<div class="item" style="flex-wrap:wrap"><span class="health-dot ${dot}"></span>
         <div class="grow" style="min-width:160px"><b>${esc(k.masked)}</b> <span class="tag">${esc(providerLabel(k.provider))}</span></div>
         <div style="display:flex;flex-direction:column;gap:2px;align-items:flex-end;min-width:120px;font-size:11px">
-          ${has ? quota : '<span class="dim">not reported</span>'}${reset}${limited}${fresh ? '<span class="freshness">' + fresh + "</span>" : ""}
+          ${has ? quota : '<span class="dim">not reported</span>'}${reset}${limited}${fresh?'<span style="font-size:9px;color:var(--text-3)">'+fresh+"</span>":""}
         </div></div>`;
     }).join("");
   }
 
   function renderMonReliability(R) {
-    const pct = (n, d) => d ? (100 * n) / d : 0;
     const wo = pct(R.first_attempt_ok, R.with_key_attempts), w = pct(R.ok_with_key_attempts, R.with_key_attempts), up = w - wo;
-    $("#monReliabilityBars").innerHTML = R.with_key_attempts ? `
+    const bars = $("#monReliabilityBars"); if (!bars) return;
+    bars.innerHTML = R.with_key_attempts ? `
       <div class="bar-row"><div class="bar-label">1st attempt</div><div class="bar-track"><div class="bar-fill" style="width:${wo.toFixed(1)}%;background:var(--text-3)"></div></div><div class="bar-value">${wo.toFixed(1)}%</div></div>
       <div class="bar-row"><div class="bar-label">With retries</div><div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(1)}%;background:var(--accent)"></div></div><div class="bar-value">${w.toFixed(1)}%</div></div>
-      ${up > 0.05 ? '<p class="dim" style="margin-top:4px">+' + up.toFixed(1) + " pts from retries</p>" : ""}` : '<p class="dim">Not enough data.</p>';
+      ${up>0.05?'<p class="dim" style="margin-top:4px">+'+up.toFixed(1)+" pts from retries</p>":""}` : '<p class="dim">Not enough data.</p>';
     const rr = pct(R.needed_retry, R.with_key_attempts), rs = pct(R.retry_rescued, R.needed_retry);
-    $("#monReliabilitySummary").innerHTML = `
-      <div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts ? rr.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry ? rs.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
+    const sum = $("#monReliabilitySummary"); if (!sum) return;
+    sum.innerHTML = `
+      <div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts?rr.toFixed(0)+"%":"—"}</div></div>
+      <div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry?rs.toFixed(0)+"%":"—"}</div></div>
+      <div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts?Number(R.avg_key_attempts).toFixed(2):"—"}</div></div>`;
   }
 
   function renderRecentErrors(usage) {
+    const el = $("#monErrors"); if (!el) return;
     const errors = usage.recent.filter((r) => !r.ok);
-    if (!errors.length) { $("#monErrors").innerHTML = '<p class="dim">None.</p>'; return; }
-    $("#monErrors").innerHTML = errors.slice(0, 10).map((r) => `<div class="error-row"><span class="er-time">${esc(ago(r.at))}</span><span class="er-code">${esc((r.error || "?").slice(0, 50))}</span><span class="er-key">${esc(r.key_masked || "—")}</span><span class="dim" style="margin-left:auto">${esc(r.client)}</span></div>`).join("");
+    if (!errors.length) { el.innerHTML = '<p class="dim">None.</p>'; return; }
+    el.innerHTML = errors.slice(0, 10).map((r) => `<div class="error-row"><span class="er-time">${esc(ago(r.at))}</span><span class="er-code">${esc((r.error||"?").slice(0,50))}</span><span class="er-key">${esc(r.key_masked||"—")}</span><span class="dim" style="margin-left:auto">${esc(r.client)}</span></div>`).join("");
   }
 
-  function tickCountdowns() {
-    const nowMs = Date.now();
-    document.querySelectorAll("[data-reset]").forEach((el) => {
-      const diff = Date.parse(el.dataset.reset) - nowMs;
-      if (diff <= 0) { if (el.classList.contains("countdown")) { el.className = "ok"; el.textContent = "reset"; } }
-      else { const pfx = el.textContent.includes("429") ? "429 clears " : "resets "; el.textContent = pfx + fmtDuration(diff); }
-    });
-  }
-
-  // ── insights ──────────────────────────────────────────────────────────────
-  let insightTurns = [];
-  async function drawInsights() {
-    $("#insightsLocked").hidden = !!token; $("#insightsApp").hidden = !token;
-    if (!token) return;
-    try { await Promise.all([loadLimits(), loadReliability()]); } catch (e) { if (e.message !== "unauthorized") alert(e.message); }
-  }
-  $("#goUnlock").onclick = () => show("console", true);
-
-  async function loadLimits() {
-    const L = await api("/v1/limits");
-    const calls24h = L.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
-    const rl = L.keys.filter((k) => k.rateLimitedRecently).length, cl = L.keys.filter((k) => k.currentlyLimited).length;
-    const bc = L.keys.filter((k) => k.benched).length, ps = L.keys.filter((k) => k.paused || k.providerPaused).length;
-    $("#limitsSummary").innerHTML = `
-      <div><div class="k">Keys</div><div class="v">${L.keys.length}</div></div>
-      <div><div class="k">24h calls</div><div class="v">${calls24h}</div></div>
-      <div><div class="k">Limited now</div><div class="v ${cl?"warn":""}">${cl}</div></div>
-      <div><div class="k">Limited 24h</div><div class="v ${rl?"warn":""}">${rl}</div></div>
-      <div><div class="k">Benched</div><div class="v ${bc?"bad":""}">${bc}</div></div>
-      <div><div class="k">Paused</div><div class="v ${ps?"warn":""}">${ps}</div></div>`;
-    $("#limitsByProvider").innerHTML = L.byProvider.length
-      ? `<tr><th>Provider</th><th>Keys</th><th>24h</th><th>Limited</th><th>Benched</th><th>Paused</th></tr>` + L.byProvider.map((p) => `<tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td><td class="num ${p.currentlyLimited?"warn":""}">${p.currentlyLimited}</td><td class="num ${p.benched?"bad":""}">${p.benched}</td><td class="num ${p.paused?"warn":""}">${p.paused}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-    $("#limitsByKey").innerHTML = L.keys.length
-      ? `<tr><th>Key</th><th>Provider</th><th>24h</th><th>Status</th></tr>` + L.keys.map((k) => `<tr><td>${esc(k.masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.callsLast24h}</td><td>${k.benched?'<span class="bad">benched</span>':(k.paused||k.providerPaused)?'<span class="warn">paused</span>':k.currentlyLimited?'<span class="warn">limited '+esc(ago(k.rateLimitedUntil))+'</span>':k.rateLimitedRecently?'<span class="warn">limited</span>':'<span class="ok">ok</span>'}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-  }
-
-  async function loadReliability() {
-    const R = await api("/v1/reliability");
-    const pct = (n, d) => d ? (100 * n) / d : 0;
-    const wo = pct(R.first_attempt_ok, R.with_key_attempts), w = pct(R.ok_with_key_attempts, R.with_key_attempts), up = w - wo;
-    $("#reliabilityBars").innerHTML = R.with_key_attempts ? `
-      <div class="bar-row"><div class="bar-label">1st attempt</div><div class="bar-track"><div class="bar-fill" style="width:${wo.toFixed(1)}%;background:var(--text-3)"></div></div><div class="bar-value">${wo.toFixed(1)}%</div></div>
-      <div class="bar-row"><div class="bar-label">With retries</div><div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(1)}%;background:var(--accent)"></div></div><div class="bar-value">${w.toFixed(1)}%</div></div>
-      ${up > 0.05 ? '<p class="dim" style="margin-top:4px">+' + up.toFixed(1) + " pts from retries</p>" : ""}` : '<p class="dim">Not enough data.</p>';
-    const rr = pct(R.needed_retry, R.with_key_attempts), rs = pct(R.retry_rescued, R.needed_retry);
-    $("#reliabilitySummary").innerHTML = `
-      <div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts ? rr.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry ? rs.toFixed(0) + "%" : "—"}</div></div>
-      <div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts ? Number(R.avg_key_attempts).toFixed(2) : "—"}</div></div>`;
-    $("#reliabilityByProvider").innerHTML = R.byProvider.length
-      ? `<tr><th>Provider</th><th>Calls</th><th>Retry %</th><th>Rescue %</th></tr>` + R.byProvider.map((p) => `<tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.total}</td><td class="num">${pct(p.needed_retry, p.total).toFixed(0)}%</td><td class="num">${p.needed_retry ? pct(p.retry_rescued, p.needed_retry).toFixed(0) + "%" : "—"}</td></tr>`).join("")
-      : `<tr><td class="dim">—</td></tr>`;
-  }
-
-  $("#genInsights").onclick = async () => {
-    $("#genInsights").disabled = true; $("#insightsOut").innerHTML = '<p class="dim">Analyzing…</p>';
+  // ── REQUESTS ──────────────────────────────────────────────────────────
+  let reqOffset = 0, reqTotal = 0;
+  pageLoaders.requests = async () => { reqOffset = 0; await loadRequests(); };
+  async function loadRequests() {
+    const el = $("#page-requests");
+    const params = new URLSearchParams();
+    const fc = el.querySelector?.("[data-f=client]")?.value; if (fc) params.set("client", fc);
+    const fp = el.querySelector?.("[data-f=provider]")?.value; if (fp) params.set("provider", fp);
+    const fs = el.querySelector?.("[data-f=status]")?.value; if (fs) params.set("status", fs);
+    params.set("limit", "50");
+    params.set("offset", String(reqOffset));
     try {
-      const r = await api("/v1/insights", { method: "POST" });
-      $("#insightsOut").innerHTML = `<p style="margin:0 0 6px;font-weight:600;font-family:var(--sans);font-size:13px">${esc(r.headline)}</p><ul style="margin:0;padding-left:16px;font-family:var(--sans);font-size:12px">${r.bullets.map((b) => `<li style="margin-top:3px">${esc(b)}</li>`).join("")}</ul><p class="dim" style="margin-top:8px">${esc(r.model)} · ${esc(r.key)}</p>`;
-    } catch (e) { $("#insightsOut").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
-    $("#genInsights").disabled = false;
+      const data = await api("/v1/requests?" + params);
+      reqTotal = data.total;
+      el.innerHTML = `
+        <div class="page-header"><h2>Requests</h2><span class="subtitle">${reqTotal} total</span></div>
+        <div class="filter-bar">
+          <input class="inp" data-f="client" placeholder="Client" value="${esc(fc || "")}">
+          <select class="inp" data-f="provider"><option value="">All providers</option>${providers.map((p)=>`<option value="${esc(p.id)}"${p.id===fp?" selected":""}>${esc(p.label)}</option>`).join("")}</select>
+          <select class="inp" data-f="status"><option value="">All</option><option value="ok"${fs==="ok"?" selected":""}>OK</option><option value="error"${fs==="error"?" selected":""}>Error</option></select>
+          <button class="btn primary" id="reqFilter">Filter</button>
+        </div>
+        <div style="overflow-x:auto">
+        <table>
+          <tr><th>Time</th><th>ID</th><th>Client</th><th>Provider</th><th>Model</th><th>Latency</th><th>Tokens</th><th>Status</th></tr>
+          ${data.rows.map((r)=>`<tr>
+            <td>${esc(ago(r.at))}</td>
+            <td style="font-size:9px;color:var(--text-3)">${esc((r.request_id||"").slice(0,12))}</td>
+            <td>${esc(r.client)}</td>
+            <td>${esc(providerLabel(r.provider))}</td>
+            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis">${esc(r.model||"—")}</td>
+            <td class="num">${r.latency_ms!=null?fmtMs(r.latency_ms):"—"}</td>
+            <td class="num">${r.input_tokens!=null?(r.input_tokens+r.output_tokens):"—"}</td>
+            <td class="${r.ok?"ok":"bad"}">${r.ok?"ok":esc((r.error_code||r.error||"fail").slice(0,20))}</td>
+          </tr>`).join("")}
+        </table></div>
+        <div class="pagination">
+          <button class="btn" id="reqPrev" ${reqOffset===0?"disabled":""}>← Prev</button>
+          <span class="dim">${reqOffset+1}–${Math.min(reqOffset+50,reqTotal)} of ${reqTotal}</span>
+          <button class="btn" id="reqNext" ${reqOffset+50>=reqTotal?"disabled":""}>Next →</button>
+        </div>`;
+      el.querySelector("#reqFilter").onclick = () => { reqOffset = 0; loadRequests(); };
+      el.querySelector("#reqPrev").onclick = () => { reqOffset = Math.max(0, reqOffset - 50); loadRequests(); };
+      el.querySelector("#reqNext").onclick = () => { reqOffset += 50; loadRequests(); };
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  }
+
+  // ── KEYS ──────────────────────────────────────────────────────────────
+  pageLoaders.keys = async () => {
+    const el = $("#page-keys");
+    el.innerHTML = `
+      <div class="page-header"><h2>API Keys</h2></div>
+      <div class="card"><p class="label">Add keys</p>
+        <div class="row" style="margin-bottom:6px"><select id="keyProvider" class="inp grow">${providers.map((p)=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("")}</select></div>
+        <textarea id="keyInput" class="inp" rows="3" spellcheck="false" placeholder="Paste keys here"></textarea>
+        <div class="row" style="margin-top:6px">
+          <input id="keyLabel" class="inp grow" placeholder="Label (optional)" autocomplete="off">
+          <button class="btn primary" id="save">Save</button>
+        </div>
+        <div id="saveOut" style="margin-top:8px"></div>
+      </div>
+      <div class="card"><p class="label">Models</p><div id="models"></div></div>
+      <div class="card"><p class="label">Rotation queue</p><div id="keysList"></div></div>
+      <div class="card"><p class="label">Clients</p>
+        <div class="row"><input id="clientName" class="inp grow" placeholder="Name" autocomplete="off"><button class="btn" id="mkClient">Issue</button></div>
+        <div id="clientOut" style="margin-top:8px"></div>
+        <div id="clientsList"></div>
+      </div>
+      <div class="card"><p class="label">Usage</p>
+        <div class="grid" id="usageSummary"></div>
+        <p class="sec">By provider</p><div style="overflow-x:auto"><table id="usageByProvider"></table></div>
+        <p class="sec">By key</p><div style="overflow-x:auto"><table id="usageByKey"></table></div>
+        <p class="sec">Recent</p><div style="overflow-x:auto"><table id="usageRecent"></table></div>
+      </div>`;
+    await loadKeys();
   };
 
-  function drawDataChat() {
-    $("#dataChatLog").innerHTML = insightTurns.map((t) => `<div class="turn ${t.role === "user" ? "you" : ""} ${t.trouble ? "trouble" : ""}"><div class="who">${t.role === "user" ? "You" : "Gateway"}</div><div class="bubble">${esc(t.content)}</div></div>`).join("");
-    $("#dataChatLog").scrollIntoView({ block: "end" });
-  }
-  async function sendDataChat() {
-    const text = $("#dataChatInput").value.trim(); if (!text) return;
-    insightTurns.push({ role: "user", content: text }); $("#dataChatInput").value = ""; drawDataChat();
-    $("#dataChatSend").disabled = true; $("#dataChatStatus").textContent = "Thinking…";
-    try {
-      const history = insightTurns.slice(0, -1).filter((t) => !t.trouble).map((t) => ({ role: t.role, content: t.content }));
-      const r = await api("/v1/insights/chat", { method: "POST", body: JSON.stringify({ question: text, history }) });
-      insightTurns.push({ role: "assistant", content: r.answer });
-    } catch (e) { insightTurns.push({ role: "assistant", trouble: true, content: e.message }); }
-    $("#dataChatSend").disabled = false; $("#dataChatStatus").textContent = ""; drawDataChat();
-  }
-  $("#dataChatSend").onclick = sendDataChat;
-  $("#dataChatInput").onkeydown = (e) => { if (e.key === "Enter") sendDataChat(); };
+  async function loadKeys() {
+    const k = await api("/v1/keys");
+    const nowIso = new Date().toISOString();
+    const kl = $("#keysList"); if (!kl) return;
+    kl.innerHTML = k.queue.length ? k.queue.map((x) => {
+      const stillLimited = x.rateLimitedUntil && x.rateLimitedUntil > nowIso;
+      const sc = x.benched?"var(--rose)":x.paused||x.providerPaused?"var(--rose)":stillLimited?"var(--amber)":x.next?"var(--accent)":"var(--text-3)";
+      return `<div class="item"><span style="color:${sc}">${x.next?"&#9654;":"&#9679;"}</span>
+        <div class="grow">
+          <div class="row" style="flex-wrap:wrap;gap:4px 6px"><b>${esc(x.masked)}</b><span class="tag">${esc(providerLabel(x.provider))}</span>
+            ${x.next?'<span class="tag">next</span>':""}${x.benched?'<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">benched</span>':""}${x.paused?'<span class="tag" style="background:rgba(239,95,123,.1);color:var(--rose)">paused</span>':""}</div>
+          <div class="dim" style="margin-top:3px">${x.uses} call${x.uses===1?"":"s"}${x.totalFailures?" · "+x.totalFailures+" fail":""}${x.label?" · "+esc(x.label):""}${x.lastRateLimitedAt?' · <span class="warn">limited '+esc(ago(x.lastRateLimitedAt))+"</span>":""}${stillLimited?' · <span class="warn countdown" data-reset="'+esc(x.rateLimitedUntil)+'">resets '+fmtDuration(Date.parse(x.rateLimitedUntil)-Date.now())+"</span>":""}</div>
+          ${x.benched?'<div class="bad" style="margin-top:2px;font-size:10px">benched'+(x.benchedReason?": "+esc(x.benchedReason.slice(0,100)):"")+' </div>':""}
+          <div class="probe" data-probe="${x.id}" hidden></div>
+        </div>
+        ${x.benched?`<button class="btn" data-unbench="${x.id}" style="font-size:10px">Un-bench</button>`:""}
+        <button class="btn" data-key-toggle="${x.id}" data-paused="${x.paused}" style="font-size:10px">${x.paused?"Resume":"Pause"}</button>
+        <button class="btn" data-test="${x.id}" style="font-size:10px">Test</button>
+        <button class="btn danger" data-del="${x.id}" style="font-size:10px">Del</button>
+      </div>`;
+    }).join("") : '<p class="dim" style="padding:8px 0">No keys yet.</p>';
 
-  const startPath = location.pathname.replace(/\/+$/, "");
-  show(startPath === "/chat" ? "chat" : startPath === "/insights" ? "insights" : startPath === "/monitor" ? "monitor" : "console", false);
-  if (token) unlock(token); else { $("#gate").hidden = false; if (view === "console") $("#tok").focus(); }
+    $$("[data-key-toggle]").forEach((b) => (b.onclick = async () => { b.disabled=true; try{await api("/v1/keys/"+b.dataset.keyToggle+"/"+(b.dataset.paused==="true"?"resume":"pause"),{method:"POST"});await loadKeys();}catch(e){alert(e.message);b.disabled=false;}}));
+    $$("[data-test]").forEach((b) => (b.onclick = async () => { const out=$('[data-probe="'+b.dataset.test+'"]');b.disabled=true;out.hidden=false;out.className="probe dim";out.textContent="Testing…";try{const r=await api("/v1/keys/"+b.dataset.test+"/test",{method:"POST"});out.className="probe "+(r.status==="live"?"ok":r.status==="rate_limited"?"warn":"bad");out.textContent=(r.status==="live"?"Live":r.status==="rate_limited"?"Rate limited":"Failed")+" — "+r.message;}catch(e){out.className="probe bad";out.textContent=e.message;}b.disabled=false;}));
+    $$("[data-unbench]").forEach((b) => (b.onclick = async () => { b.disabled=true;try{await api("/v1/keys/"+b.dataset.unbench+"/unbench",{method:"POST"});await loadKeys();}catch(e){alert(e.message);b.disabled=false;}}));
+    $$("[data-del]").forEach((b) => (b.onclick = async () => { if(!confirm("Remove this key?"))return;try{await api("/v1/keys/"+b.dataset.del,{method:"DELETE"});await loadKeys();}catch(e){alert(e.message);}}));
+
+    const sv = $("#save");
+    if (sv) sv.onclick = async () => {
+      const keys=$("#keyInput").value.trim();if(!keys)return;sv.disabled=true;
+      try{const r=await api("/v1/keys",{method:"POST",body:JSON.stringify({keys,label:$("#keyLabel").value.trim(),provider:$("#keyProvider").value})});
+      $("#keyInput").value="";$("#keyLabel").value="";
+      $("#saveOut").innerHTML=`<span class="ok" style="font-size:11px">Stored ${r.added.map((a)=>esc(a.masked)).join(", ")}</span>`+(r.skipped.length?`<div class="warn" style="font-size:10px;margin-top:4px">${r.skipped.map(esc).join("<br>")}</div>`:"");
+      await loadKeys();}catch(e){$("#saveOut").innerHTML=`<span class="bad" style="font-size:11px">${esc(e.message)}</span>`;}sv.disabled=false;
+    };
+
+    await drawModels();
+    await loadClients();
+    await loadUsage();
+  }
+
+  async function drawModels() {
+    const m = await api("/v1/models");
+    const el = $("#models"); if (!el) return;
+    el.innerHTML = m.models.map((x) => `
+      <div class="item" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div class="row"><b>${esc(x.label)}</b><span class="dim" style="margin-left:auto">using ${esc(x.effective)}${x.override?"":" (default)"}</span></div>
+        <div class="row"><input class="inp grow" data-model="${esc(x.provider)}" placeholder="${esc(x.registryDefault)}" value="${esc(x.override||"")}"><button class="btn" data-model-save="${esc(x.provider)}" style="font-size:10px">Save</button></div>
+      </div>`).join("");
+    $$("[data-model-save]").forEach((b) => (b.onclick = async () => { const id=b.dataset.modelSave;b.disabled=true;try{await api("/v1/models",{method:"POST",body:JSON.stringify({provider:id,model:$('[data-model="'+id+'"]').value.trim()})});await drawModels();}catch(e){alert(e.message);b.disabled=false;}}));
+  }
+
+  async function loadClients() {
+    const c = await api("/v1/clients");
+    const el = $("#clientsList"); if (!el) return;
+    el.innerHTML = c.clients.length ? c.clients.map((x) => `<div class="item"><div class="grow"><b>${esc(x.name)}</b><span class="dim" style="margin-left:6px">${x.calls} call${x.calls===1?"":"s"}${x.last_seen?" · "+ago(x.last_seen):" · never"}</span></div><button class="btn danger" data-revoke="${esc(x.name)}" style="font-size:10px">Revoke</button></div>`).join("") : '<p class="dim" style="padding:8px 0">No clients yet.</p>';
+    $$("[data-revoke]").forEach((b) => (b.onclick = async () => { if(!confirm('Revoke "'+b.dataset.revoke+'"?'))return;try{await api("/v1/clients/"+encodeURIComponent(b.dataset.revoke),{method:"DELETE"});await loadClients();}catch(e){alert(e.message);}}));
+    const mk = $("#mkClient");
+    if (mk) mk.onclick = async () => {
+      const name=$("#clientName").value.trim();if(!name)return;
+      try{const r=await api("/v1/clients",{method:"POST",body:JSON.stringify({name})});
+      $("#clientName").value="";
+      $("#clientOut").innerHTML=`<div class="item" style="flex-direction:column;align-items:stretch;gap:4px"><div class="dim">${esc(r.note)}</div><b style="color:var(--accent);word-break:break-all;font-size:11px">${esc(r.token)}</b><button class="btn" style="font-size:10px" onclick="navigator.clipboard.writeText('${esc(r.token)}')">Copy</button></div>`;
+      await loadClients();}catch(e){$("#clientOut").innerHTML=`<span class="bad" style="font-size:11px">${esc(e.message)}</span>`;}
+    };
+  }
+
+  async function loadUsage() {
+    const u = await api("/v1/usage?limit=25"), s = u.summary;
+    const rate = (c2, ok) => c2 ? Math.round((100 * ok) / c2) + "%" : "—";
+    const sum = $("#usageSummary"); if (!sum) return;
+    sum.innerHTML = `
+      <div><div class="k">Calls</div><div class="v">${s.calls}</div></div>
+      <div><div class="k">OK</div><div class="v ok">${s.ok}</div></div>
+      <div><div class="k">Failed</div><div class="v ${s.calls-s.ok?"warn":""}">${s.calls-s.ok}</div></div>
+      <div><div class="k">Tokens in</div><div class="v">${s.input_tokens.toLocaleString()}</div></div>
+      <div><div class="k">Tokens out</div><div class="v">${s.output_tokens.toLocaleString()}</div></div>`;
+    const bp = $("#usageByProvider"); if (bp) bp.innerHTML = s.byProvider?.length
+      ? `<tr><th>Provider</th><th>Calls</th><th>OK</th><th>In</th><th>Out</th></tr>`+s.byProvider.map((p)=>`<tr><td>${esc(providerLabel(p.provider))}</td><td class="num">${p.calls}</td><td class="num">${rate(p.calls,p.ok)}</td><td class="num">${p.input_tokens.toLocaleString()}</td><td class="num">${p.output_tokens.toLocaleString()}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
+    const bk = $("#usageByKey"); if (bk) bk.innerHTML = s.byKey?.length
+      ? `<tr><th>Key</th><th>Provider</th><th>Calls</th><th>OK</th></tr>`+s.byKey.map((k2)=>`<tr><td>${esc(k2.key_masked)}</td><td>${esc(providerLabel(k2.provider))}</td><td class="num">${k2.calls}</td><td class="num">${rate(k2.calls,k2.ok)}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
+    const rc = $("#usageRecent"); if (rc) rc.innerHTML = u.recent.length
+      ? `<tr><th>When</th><th>Client</th><th>Model</th><th>Key</th><th></th></tr>`+u.recent.map((r)=>`<tr><td>${esc(ago(r.at))}</td><td>${esc(r.client)}</td><td>${esc(r.model||"—")}</td><td>${esc(r.key_masked||"—")}</td><td class="${r.ok?"ok":"warn"}">${r.ok?"ok":esc((r.error||"fail").slice(0,40))}</td></tr>`).join("")
+      : `<tr><td class="dim">—</td></tr>`;
+  }
+
+  // ── PROVIDERS ─────────────────────────────────────────────────────────
+  pageLoaders.providers = async () => {
+    const el = $("#page-providers");
+    const limits = await api("/v1/limits");
+    el.innerHTML = `<div class="page-header"><h2>Providers</h2></div>` +
+      limits.byProvider.map((p) => {
+        const sr = p.keys>0?pct(p.callsLast24h-p.rateLimitedRecently-p.benched,p.callsLast24h||1):0;
+        return `<div class="card"><div class="row" style="margin-bottom:8px"><b style="font:500 13px var(--sans)">${esc(p.label)}</b>
+          <span class="dim" style="margin-left:auto">${p.keys} key${p.keys===1?"":"s"}</span>
+          <button class="btn" data-ptoggle="${esc(p.provider)}" data-pp="${p.paused>0}" style="font-size:10px">${p.paused>0?"Resume":"Pause"}</button></div>
+          <div class="grid">
+            <div><div class="k">24h calls</div><div class="v">${p.callsLast24h}</div></div>
+            <div><div class="k">Limited</div><div class="v ${p.currentlyLimited?"warn":""}">${p.currentlyLimited}</div></div>
+            <div><div class="k">Benched</div><div class="v ${p.benched?"bad":""}">${p.benched}</div></div>
+            <div><div class="k">Paused</div><div class="v ${p.paused?"warn":""}">${p.paused}</div></div>
+          </div></div>`;
+      }).join("") || '<div class="card"><p class="dim">No providers with keys.</p></div>';
+    $$("[data-ptoggle]").forEach((b) => (b.onclick = async () => {
+      const id=b.dataset.ptoggle,wasPaused=b.dataset.pp==="true";b.disabled=true;
+      try{await api("/v1/providers/"+id+"/"+(wasPaused?"resume":"pause"),{method:"POST"});pageLoaders.providers();}catch(e){alert(e.message);b.disabled=false;}
+    }));
+  };
+
+  // ── ANALYTICS ─────────────────────────────────────────────────────────
+  pageLoaders.analytics = async () => {
+    const el = $("#page-analytics");
+    el.innerHTML = `<div class="page-header"><h2>Cost &amp; Usage Analytics</h2></div>
+      <div class="card"><p class="label">Cost by provider <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">30d</span></p><div id="costByProvider"></div></div>
+      <div class="card"><p class="label">Cost by model <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">30d</span></p><div id="costByModel"></div></div>
+      <div class="card"><p class="label">Cost by client <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">30d</span></p><div id="costByClient"></div></div>
+      <div class="card"><p class="label">Pricing</p><div id="pricingList"></div>
+        <p class="sec">Add pricing</p>
+        <div class="row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
+          <input class="inp" id="prProvider" placeholder="provider" style="width:100px">
+          <input class="inp" id="prModel" placeholder="model" style="width:160px">
+          <input class="inp" id="prInp" placeholder="$/M in" style="width:80px" type="number" step="0.01">
+          <input class="inp" id="prOut" placeholder="$/M out" style="width:80px" type="number" step="0.01">
+          <button class="btn primary" id="prSave">Save</button>
+        </div>
+      </div>`;
+    const renderCost = (containerId, data) => {
+      const c = $("#"+containerId); if(!c) return;
+      if(!data.length){c.innerHTML='<p class="dim">No data.</p>';return;}
+      c.innerHTML=`<table><tr><th>Name</th><th>Requests</th><th>Tokens</th><th>Est. Cost</th></tr>`+data.map((r)=>`<tr><td>${esc(r.group_key||"—")}</td><td class="num">${r.requests}</td><td class="num">${(r.input_tokens+r.output_tokens).toLocaleString()}</td><td class="num">$${Number(r.estimated_cost).toFixed(4)}</td></tr>`).join("")+`</table>`;
+    };
+    try{
+      const [bp,bm,bc,pr]=await Promise.all([api("/v1/analytics/cost?group_by=provider"),api("/v1/analytics/cost?group_by=model"),api("/v1/analytics/cost?group_by=client"),api("/v1/pricing")]);
+      renderCost("costByProvider",bp.data);renderCost("costByModel",bm.data);renderCost("costByClient",bc.data);
+      const pl=$("#pricingList");if(pl){pl.innerHTML=pr.pricing.length?`<table><tr><th>Provider</th><th>Model</th><th>$/M in</th><th>$/M out</th><th></th></tr>`+pr.pricing.map((p)=>`<tr><td>${esc(p.provider)}</td><td>${esc(p.model)}</td><td class="num">${p.inputPricePerM}</td><td class="num">${p.outputPricePerM}</td><td><button class="btn danger" data-prdel="${esc(p.provider)}|${esc(p.model)}" style="font-size:9px">Del</button></td></tr>`).join("")+`</table>`:'<p class="dim">No pricing configured. Costs show $0 until you add pricing.</p>';
+        $$("[data-prdel]").forEach((b)=>(b.onclick=async()=>{const[pv,md]=b.dataset.prdel.split("|");try{await api("/v1/pricing/"+encodeURIComponent(pv)+"/"+encodeURIComponent(md),{method:"DELETE"});pageLoaders.analytics();}catch(e){alert(e.message);}}));
+      }
+    }catch(e){if(e.message!=="unauthorized")el.innerHTML+=`<p class="bad">${esc(e.message)}</p>`;}
+    const prS=$("#prSave");if(prS)prS.onclick=async()=>{
+      try{await api("/v1/pricing",{method:"POST",body:JSON.stringify({provider:$("#prProvider").value.trim(),model:$("#prModel").value.trim(),inputPricePerM:parseFloat($("#prInp").value),outputPricePerM:parseFloat($("#prOut").value)})});pageLoaders.analytics();}catch(e){alert(e.message);}
+    };
+  };
+
+  // ── RATE LIMITS ───────────────────────────────────────────────────────
+  pageLoaders.limits = async () => {
+    const el = $("#page-limits");
+    try {
+      const [L, R] = await Promise.all([api("/v1/limits"), api("/v1/reliability")]);
+      const calls24h = L.byProvider.reduce((s, p) => s + p.callsLast24h, 0);
+      const rl = L.keys.filter((k) => k.rateLimitedRecently).length, cl = L.keys.filter((k) => k.currentlyLimited).length;
+      el.innerHTML = `<div class="page-header"><h2>Rate Limits &amp; Quotas</h2></div>
+        <div class="card"><p class="label">Overview 24h</p>
+          <div class="grid">
+            <div><div class="k">Keys</div><div class="v">${L.keys.length}</div></div>
+            <div><div class="k">24h calls</div><div class="v">${calls24h}</div></div>
+            <div><div class="k">Limited now</div><div class="v ${cl?"warn":""}">${cl}</div></div>
+            <div><div class="k">Limited 24h</div><div class="v ${rl?"warn":""}">${rl}</div></div>
+          </div>
+        </div>
+        <div class="card"><p class="label">By provider</p><div style="overflow-x:auto"><table>${L.byProvider.length
+          ?`<tr><th>Provider</th><th>Keys</th><th>24h</th><th>Limited</th><th>Benched</th><th>Paused</th></tr>`+L.byProvider.map((p)=>`<tr><td>${esc(p.label)}</td><td class="num">${p.keys}</td><td class="num">${p.callsLast24h}</td><td class="num ${p.currentlyLimited?"warn":""}">${p.currentlyLimited}</td><td class="num ${p.benched?"bad":""}">${p.benched}</td><td class="num ${p.paused?"warn":""}">${p.paused}</td></tr>`).join("")
+          :`<tr><td class="dim">—</td></tr>`}</table></div></div>
+        <div class="card"><p class="label">By key</p><div style="overflow-x:auto"><table>${L.keys.length
+          ?`<tr><th>Key</th><th>Provider</th><th>24h</th><th>Status</th></tr>`+L.keys.map((k)=>`<tr><td>${esc(k.masked)}</td><td>${esc(providerLabel(k.provider))}</td><td class="num">${k.callsLast24h}</td><td>${k.benched?'<span class="bad">benched</span>':(k.paused||k.providerPaused)?'<span class="warn">paused</span>':k.currentlyLimited?'<span class="warn">limited</span>':'<span class="ok">ok</span>'}</td></tr>`).join("")
+          :`<tr><td class="dim">—</td></tr>`}</table></div></div>
+        <div class="card"><p class="label">Reliability</p>
+          <div class="bars" id="limReliabilityBars"></div>
+          <div class="grid" id="limReliabilitySummary" style="margin-top:12px"></div>
+        </div>`;
+      const wo=pct(R.first_attempt_ok,R.with_key_attempts),w=pct(R.ok_with_key_attempts,R.with_key_attempts),up=w-wo;
+      const lrb=$("#limReliabilityBars");if(lrb)lrb.innerHTML=R.with_key_attempts?`
+        <div class="bar-row"><div class="bar-label">1st attempt</div><div class="bar-track"><div class="bar-fill" style="width:${wo.toFixed(1)}%;background:var(--text-3)"></div></div><div class="bar-value">${wo.toFixed(1)}%</div></div>
+        <div class="bar-row"><div class="bar-label">With retries</div><div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(1)}%;background:var(--accent)"></div></div><div class="bar-value">${w.toFixed(1)}%</div></div>
+        ${up>0.05?'<p class="dim" style="margin-top:4px">+'+up.toFixed(1)+" pts from retries</p>":""}` : '<p class="dim">Not enough data.</p>';
+      const lrs=$("#limReliabilitySummary");if(lrs){const rr=pct(R.needed_retry,R.with_key_attempts),rs=pct(R.retry_rescued,R.needed_retry);
+      lrs.innerHTML=`<div><div class="k">Retry rate</div><div class="v ${rr?"warn":""}">${R.with_key_attempts?rr.toFixed(0)+"%":"—"}</div></div><div><div class="k">Rescue rate</div><div class="v ${R.needed_retry?"ok":""}">${R.needed_retry?rs.toFixed(0)+"%":"—"}</div></div><div><div class="k">Avg keys/call</div><div class="v">${R.with_key_attempts?Number(R.avg_key_attempts).toFixed(2):"—"}</div></div>`;}
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  };
+
+  // ── APPLICATIONS ──────────────────────────────────────────────────────
+  pageLoaders.apps = async () => {
+    const el = $("#page-apps");
+    try {
+      const data = await api("/v1/applications");
+      el.innerHTML = `<div class="page-header"><h2>Applications</h2></div>
+        <div class="card"><p class="label">Create application</p>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <input class="inp" id="appName" placeholder="name" style="width:160px">
+            <input class="inp grow" id="appDesc" placeholder="description (optional)">
+            <button class="btn primary" id="appCreate">Create</button>
+          </div>
+        </div>` +
+        (data.applications.length ? data.applications.map((a) => `
+          <div class="card"><div class="row"><b style="font:500 13px var(--sans)">${esc(a.name)}</b>
+            <span class="dim" style="margin-left:8px">${esc(a.description)}</span>
+            <button class="btn danger" data-appdel="${a.id}" style="margin-left:auto;font-size:10px">Delete</button></div>
+            <div class="grid" style="margin-top:8px">
+              ${a.rate_limit_rpm!=null?`<div><div class="k">RPM</div><div class="v">${a.rate_limit_rpm}</div></div>`:""}
+              ${a.rate_limit_rpd!=null?`<div><div class="k">RPD</div><div class="v">${a.rate_limit_rpd}</div></div>`:""}
+              ${a.budget_daily!=null?`<div><div class="k">Daily budget</div><div class="v">$${a.budget_daily}</div></div>`:""}
+            </div>
+          </div>`).join("") : '<div class="card"><p class="dim">No applications yet.</p></div>');
+      const cr=$("#appCreate");if(cr)cr.onclick=async()=>{try{await api("/v1/applications",{method:"POST",body:JSON.stringify({name:$("#appName").value.trim(),description:$("#appDesc").value.trim()})});pageLoaders.apps();}catch(e){alert(e.message);}};
+      $$("[data-appdel]").forEach((b)=>(b.onclick=async()=>{if(!confirm("Delete this application?"))return;try{await api("/v1/applications/"+b.dataset.appdel,{method:"DELETE"});pageLoaders.apps();}catch(e){alert(e.message);}}));
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  };
+
+  // ── ROUTING ───────────────────────────────────────────────────────────
+  pageLoaders.routing = async () => {
+    const el = $("#page-routing");
+    try {
+      const data = await api("/v1/routing");
+      el.innerHTML = `<div class="page-header"><h2>Routing Rules</h2></div>
+        <div class="card"><p class="label">Create rule</p>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <select class="inp" id="routeType" style="width:160px"><option value="provider_priority">Provider priority</option><option value="model_mapping">Model mapping</option><option value="load_balance">Load balance</option></select>
+            <input class="inp grow" id="routeConfig" placeholder='Config JSON (e.g. {"providers":["groq","gemini"]})'>
+            <input class="inp" id="routePriority" placeholder="Priority" style="width:70px" type="number" value="0">
+            <button class="btn primary" id="routeCreate">Create</button>
+          </div>
+        </div>` +
+        (data.rules.length ? `<div class="card"><p class="label">Active rules</p>`+data.rules.map((r) => `
+          <div class="item"><div class="grow"><b>${esc(r.rule_type)}</b> <span class="dim">priority ${r.priority}${r.application_id?" · app "+r.application_id:""}</span>
+            <div class="dim" style="margin-top:2px;word-break:break-all">${esc((r.config||"").slice(0,200))}</div></div>
+            <button class="btn danger" data-routedel="${r.id}" style="font-size:10px">Del</button>
+          </div>`).join("")+`</div>` : '<div class="card"><p class="dim">No routing rules configured.</p></div>');
+      const rc=$("#routeCreate");if(rc)rc.onclick=async()=>{try{await api("/v1/routing",{method:"POST",body:JSON.stringify({ruleType:$("#routeType").value,config:$("#routeConfig").value.trim(),priority:parseInt($("#routePriority").value)||0})});pageLoaders.routing();}catch(e){alert(e.message);}};
+      $$("[data-routedel]").forEach((b)=>(b.onclick=async()=>{try{await api("/v1/routing/"+b.dataset.routedel,{method:"DELETE"});pageLoaders.routing();}catch(e){alert(e.message);}}));
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  };
+
+  // ── ALERTS ────────────────────────────────────────────────────────────
+  pageLoaders.alerts = async () => {
+    const el = $("#page-alerts");
+    try {
+      const [rules, hist] = await Promise.all([api("/v1/alerts"), api("/v1/alerts/history")]);
+      el.innerHTML = `<div class="page-header"><h2>Alerts</h2></div>
+        <div class="card"><p class="label">Create alert</p>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <input class="inp" id="alertName" placeholder="Name" style="width:140px">
+            <select class="inp" id="alertType" style="width:130px"><option value="error_rate">Error rate</option><option value="latency_p95">Latency P95</option></select>
+            <input class="inp" id="alertThreshold" placeholder="Threshold" style="width:80px" type="number" step="0.01">
+            <input class="inp" id="alertWindow" placeholder="Window (min)" style="width:90px" type="number" value="5">
+            <input class="inp grow" id="alertWebhook" placeholder="Webhook URL">
+            <button class="btn primary" id="alertCreate">Create</button>
+          </div>
+        </div>` +
+        (rules.rules.length ? `<div class="card"><p class="label">Alert rules</p>`+rules.rules.map((r) => `
+          <div class="item"><div class="grow"><b>${esc(r.name)}</b> <span class="dim">${esc(r.condition_type)} ${r.threshold > 1 ? "> " + r.threshold + "ms" : "> " + (r.threshold * 100).toFixed(0) + "%"} over ${r.window_minutes}m</span>
+            ${r.last_fired_at ? '<span class="dim" style="margin-left:6px">last fired ' + esc(ago(r.last_fired_at)) + "</span>" : ""}</div>
+            <button class="btn danger" data-alertdel="${r.id}" style="font-size:10px">Del</button>
+          </div>`).join("")+`</div>` : '<div class="card"><p class="dim">No alert rules configured.</p></div>') +
+        (hist.history.length ? `<div class="card"><p class="label">Recent firings</p><table><tr><th>Time</th><th>Rule</th><th>Value</th><th>Delivered</th></tr>`+hist.history.slice(0,20).map((h) => `<tr><td>${esc(ago(h.fired_at))}</td><td class="num">${h.alert_rule_id}</td><td class="num">${Number(h.condition_value).toFixed(3)}</td><td class="${h.delivery_ok?"ok":"bad"}">${h.delivery_ok?"yes":"no"}</td></tr>`).join("")+`</table></div>` : "");
+      const ac=$("#alertCreate");if(ac)ac.onclick=async()=>{try{await api("/v1/alerts",{method:"POST",body:JSON.stringify({name:$("#alertName").value.trim(),conditionType:$("#alertType").value,threshold:parseFloat($("#alertThreshold").value),windowMinutes:parseInt($("#alertWindow").value)||5,webhookUrl:$("#alertWebhook").value.trim()})});pageLoaders.alerts();}catch(e){alert(e.message);}};
+      $$("[data-alertdel]").forEach((b)=>(b.onclick=async()=>{try{await api("/v1/alerts/"+b.dataset.alertdel,{method:"DELETE"});pageLoaders.alerts();}catch(e){alert(e.message);}}));
+    } catch (e) { if (e.message !== "unauthorized") el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+  };
+
+  // ── CHAT ──────────────────────────────────────────────────────────────
+  let clientToken = localStorage.getItem("gw.client") || "", turns = [], chatBusy = false;
+  pageLoaders.chat = () => drawChatPage();
+
+  function drawChatPage() {
+    const el = $("#page-chat");
+    if (!clientToken) {
+      el.innerHTML = `<div class="page-header"><h2>Chat Playground</h2></div>
+        <div class="card"><p class="label">Client token</p><p class="hint">Use a client token (not admin). Issue one on the Keys page.</p>
+          <div class="row"><input id="clientTok" class="inp grow" type="password" placeholder="lgw_…" autocomplete="off"><button class="btn primary" id="chatUnlock">Connect</button></div>
+          <div class="err" id="chatGateErr"></div></div>`;
+      const cu=$("#chatUnlock");if(cu)cu.onclick=()=>{const v=$("#clientTok").value.trim();if(v){clientToken=v;localStorage.setItem("gw.client",v);drawChatPage();}};
+      return;
+    }
+    el.innerHTML = `<div class="page-header"><h2>Chat Playground</h2>
+      <div class="row" style="gap:6px">
+        <input id="model" class="inp" style="width:200px" spellcheck="false" autocomplete="off" placeholder="Model (blank = default)" value="${esc(localStorage.getItem("gw.model")||"")}">
+        <button class="btn" id="newChat" style="font-size:10px">New</button>
+        <button class="btn danger" id="chatLock" style="font-size:10px">Disconnect</button>
+      </div></div>
+      <div class="card" id="logCard" ${turns.length?"":"hidden"}><div id="log"></div></div>
+      <div class="card"><textarea id="composer" class="inp" rows="2" spellcheck="false" placeholder="Enter sends, Shift+Enter newline"></textarea>
+        <div class="row" style="margin-top:6px"><span class="dim grow" id="chatStatus"></span><button class="btn primary" id="send">Send</button></div>
+      </div>`;
+    renderChatLog();
+    const m=$("#model");if(m)m.oninput=()=>localStorage.setItem("gw.model",m.value.trim());
+    $("#chatLock").onclick=()=>{clientToken="";localStorage.removeItem("gw.client");turns=[];drawChatPage();};
+    $("#newChat").onclick=()=>{turns=[];drawChatPage();};
+    $("#send").onclick=sendChat;
+    const comp=$("#composer");if(comp)comp.onkeydown=(e)=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChat();}};
+  }
+
+  function renderChatLog() {
+    const logCard=$("#logCard"),log=$("#log");if(!logCard||!log)return;
+    logCard.hidden=turns.length===0;
+    log.innerHTML=turns.map((t)=>`<div class="turn ${t.role==="user"?"you":""} ${t.trouble?"trouble":""}"><div class="who">${t.role==="user"?"You":t.trouble?"Gateway":"Assistant"}</div><div class="bubble">${esc(t.content)}</div>${t.model||t.key?`<div class="meta dim">${t.model?"<span>"+esc(t.model)+"</span>":""}${t.key?"<span>key "+esc(t.key)+"</span>":""}${t.tried>1?"<span>"+t.tried+" tried</span>":""}</div>`:""}</div>`).join("");
+    log.scrollIntoView({block:"end"});
+  }
+
+  async function sendChat() {
+    if(chatBusy)return;const comp=$("#composer");if(!comp)return;
+    const text=comp.value.trim();if(!text||!clientToken)return;
+    turns.push({role:"user",content:text});comp.value="";renderChatLog();
+    chatBusy=true;const send=$("#send");if(send)send.disabled=true;const st=$("#chatStatus");if(st)st.textContent="Waiting…";
+    const body={messages:turns.filter((t)=>!t.trouble).map((t)=>({role:t.role,content:t.content})),stream:true};
+    const model=$("#model")?.value?.trim();if(model)body.model=model;
+    const turn={role:"assistant",content:""};let started=false;
+    try{
+      const res=await fetch("/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+clientToken,"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(!res.ok||!res.body){const text2=await res.text();let payload=null;try{payload=text2?JSON.parse(text2):null;}catch{}
+        turns.push({role:"assistant",trouble:true,content:payload?.error?.message||"HTTP "+res.status});
+        if(res.status===401){chatBusy=false;clientToken="";localStorage.removeItem("gw.client");drawChatPage();return;}
+      }else{
+        turns.push(turn);started=true;renderChatLog();
+        const bubble=$("#log")?.lastElementChild?.querySelector(".bubble");
+        const reader=res.body.pipeThrough(new TextDecoderStream()).getReader();let buffer="";
+        while(true){const{done,value}=await reader.read();if(done)break;buffer+=value;const lines=buffer.split("\n");buffer=lines.pop()??"";
+          for(const line of lines){const trimmed=line.trim();if(!trimmed.startsWith("data:"))continue;const pl=trimmed.slice(5).trim();if(pl==="[DONE]")continue;
+            let json;try{json=JSON.parse(pl);}catch{continue;}
+            if(json.x_gateway){turn.model=json.model;turn.key=json.x_gateway.key;turn.tried=json.x_gateway.keys_tried?.length??1;}
+            const delta=json.choices?.[0]?.delta?.content;
+            if(delta){turn.content+=delta;if(bubble){bubble.textContent=turn.content;$("#log").scrollIntoView({block:"end"});}}}}
+        if(!turn.content){turn.trouble=true;turn.content="Model returned nothing usable. Try again.";}
+        renderChatLog();
+      }
+    }catch(e){if(started){turn.trouble=true;turn.content+=(turn.content?"\n\n":"")+"[lost: "+e.message+"]";}else turns.push({role:"assistant",trouble:true,content:"Unreachable: "+e.message});renderChatLog();}
+    chatBusy=false;if(send)send.disabled=false;if(st)st.textContent="";
+  }
+
+  // ── SETTINGS ──────────────────────────────────────────────────────────
+  pageLoaders.settings = async () => {
+    const el = $("#page-settings");
+    const currentTheme = document.documentElement.getAttribute("data-theme") || "dark";
+    el.innerHTML = `<div class="page-header"><h2>Settings</h2></div>
+      <div class="card"><p class="label">Theme</p>
+        <div class="row" style="gap:6px">
+          <button class="btn ${currentTheme==="dark"?"primary":""}" id="themeDark">Dark</button>
+          <button class="btn ${currentTheme==="light"?"primary":""}" id="themeLight">Light</button>
+        </div>
+      </div>
+      <div class="card"><p class="label">AI analysis</p>
+        <button class="btn primary" id="genInsights">Analyze</button>
+        <div id="insightsOut" style="margin-top:10px"></div>
+      </div>
+      <div class="card"><p class="label">Ask about your data</p>
+        <div id="dataChatLog"></div>
+        <div class="row" style="margin-top:8px"><input id="dataChatInput" class="inp grow" autocomplete="off" placeholder="Which provider failed the most?"><button class="btn primary" id="dataChatSend">Ask</button></div>
+        <div class="dim" id="dataChatStatus" style="margin-top:6px"></div>
+      </div>`;
+    $("#themeDark").onclick = () => { document.documentElement.setAttribute("data-theme","dark");localStorage.setItem("gw.theme","dark");pageLoaders.settings(); };
+    $("#themeLight").onclick = () => { document.documentElement.setAttribute("data-theme","light");localStorage.setItem("gw.theme","light");pageLoaders.settings(); };
+    $("#genInsights").onclick = async () => {
+      const btn=$("#genInsights"),out=$("#insightsOut");btn.disabled=true;out.innerHTML='<p class="dim">Analyzing…</p>';
+      try{const r=await api("/v1/insights",{method:"POST"});out.innerHTML=`<p style="margin:0 0 6px;font-weight:600;font-family:var(--sans);font-size:13px">${esc(r.headline)}</p><ul style="margin:0;padding-left:16px;font-family:var(--sans);font-size:12px">${r.bullets.map((b)=>`<li style="margin-top:3px">${esc(b)}</li>`).join("")}</ul><p class="dim" style="margin-top:8px">${esc(r.model)} · ${esc(r.key)}</p>`;}catch(e){out.innerHTML=`<span class="bad">${esc(e.message)}</span>`;}btn.disabled=false;
+    };
+    let insightTurns = [];
+    const drawDC = () => { const log=$("#dataChatLog");if(log)log.innerHTML=insightTurns.map((t)=>`<div class="turn ${t.role==="user"?"you":""} ${t.trouble?"trouble":""}"><div class="who">${t.role==="user"?"You":"Gateway"}</div><div class="bubble">${esc(t.content)}</div></div>`).join(""); };
+    const sendDC = async () => {
+      const inp=$("#dataChatInput"),btn=$("#dataChatSend"),st=$("#dataChatStatus");if(!inp)return;
+      const text=inp.value.trim();if(!text)return;insightTurns.push({role:"user",content:text});inp.value="";drawDC();
+      btn.disabled=true;st.textContent="Thinking…";
+      try{const history=insightTurns.slice(0,-1).filter((t)=>!t.trouble).map((t)=>({role:t.role,content:t.content}));
+        const r=await api("/v1/insights/chat",{method:"POST",body:JSON.stringify({question:text,history})});
+        insightTurns.push({role:"assistant",content:r.answer});}catch(e){insightTurns.push({role:"assistant",trouble:true,content:e.message});}
+      btn.disabled=false;st.textContent="";drawDC();
+    };
+    const dcBtn=$("#dataChatSend");if(dcBtn)dcBtn.onclick=sendDC;
+    const dcInp=$("#dataChatInput");if(dcInp)dcInp.onkeydown=(e)=>{if(e.key==="Enter")sendDC();};
+  };
+
+  // ── init ──────────────────────────────────────────────────────────────
+  const savedTheme = localStorage.getItem("gw.theme");
+  if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
+
+  const startPath = (location.pathname.replace(/\/+$/, "") || "/");
+  const startPage = PATH_MAP[startPath] || "dashboard";
+  if (token) { loadProviders().then(() => { tryUnlock(token); }); }
+  else { $("#gate").hidden = false; currentPage = startPage; }
 })();
 </script>
