@@ -60,11 +60,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     });
   }
 
-  // One file, three pages: the console, the chat, and insights. All the same
-  // document, which picks its tab from the path, so there is still only one
-  // asset to ship.
-  if (["", "/", "/monitor", "/chat", "/insights", "/dashboard", "/requests", "/keys", "/providers",
-       "/analytics", "/limits", "/apps", "/routing", "/alerts", "/settings"].includes(path) && method === "GET") {
+  if (["", "/", "/console", "/monitor", "/chat", "/insights", "/dashboard", "/requests", "/keys", "/providers",
+       "/analytics", "/limits", "/apps", "/routing", "/alerts", "/settings", "/config"].includes(path) && method === "GET") {
     return new Response(ADMIN_HTML, {
       headers: {
         "content-type": "text/html; charset=utf-8",
