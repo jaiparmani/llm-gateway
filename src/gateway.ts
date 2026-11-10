@@ -360,7 +360,14 @@ export class Gateway {
     }
     const now = Date.now();
     const healthy = usable.filter((k) => !k.benched_at && (!k.rate_limited_until || Date.parse(k.rate_limited_until) <= now));
-    return healthy.length > 0 ? healthy : usable;
+    if (healthy.length === 0) return usable;
+    const benched = usable.filter((k) => k.benched_at !== null);
+    if (benched.length === 0) return healthy;
+    const cooldownMs = 5 * 60_000;
+    const probeCandidate = benched
+      .filter((k) => now - Date.parse(k.benched_at!) >= cooldownMs)
+      .sort((a, b) => Date.parse(a.benched_at!) - Date.parse(b.benched_at!))[0];
+    return probeCandidate ? [...healthy, probeCandidate] : healthy;
   }
 
   /**
