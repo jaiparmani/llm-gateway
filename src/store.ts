@@ -549,16 +549,17 @@ export class Store {
 
   // ── dashboard ─────────────────────────────────────────────────────────
 
-  async dashboardMetrics(): Promise<{
+  async dashboardMetrics(hours?: number): Promise<{
     windows: { label: string; requests: number; ok: number; errorRate: number }[];
     latency: { p50: number | null; p95: number | null; p99: number | null };
     tokens: { inputLast24h: number; outputLast24h: number };
   }> {
-    const windowDefs = [
-      { label: "5m", ms: 5 * 60_000 },
-      { label: "1h", ms: 3_600_000 },
-      { label: "24h", ms: 86_400_000 },
-    ];
+    const h = hours ?? 24;
+    const windowDefs = h <= 4
+      ? [{ label: "5m", ms: 5 * 60_000 }, { label: "1h", ms: 3_600_000 }, { label: "4h", ms: 4 * 3_600_000 }]
+      : h <= 24
+        ? [{ label: "5m", ms: 5 * 60_000 }, { label: "1h", ms: 3_600_000 }, { label: "24h", ms: 86_400_000 }]
+        : [{ label: "1h", ms: 3_600_000 }, { label: "24h", ms: 86_400_000 }, { label: h + "h", ms: h * 3_600_000 }];
     const windows = [];
     for (const w of windowDefs) {
       const since = new Date(Date.now() - w.ms).toISOString();
@@ -570,11 +571,12 @@ export class Store {
       const ok = row?.ok ?? 0;
       windows.push({ label: w.label, requests: reqs, ok, errorRate: reqs ? 1 - ok / reqs : 0 });
     }
-    const latency = await this.latencyPercentiles(24);
-    const since24 = new Date(Date.now() - 86_400_000).toISOString();
+    const latency = await this.latencyPercentiles(h);
+    const tokenMs = h * 3_600_000;
+    const sinceTokens = new Date(Date.now() - tokenMs).toISOString();
     const tokens = await this.db
       .prepare("SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o FROM usage WHERE at >= ?")
-      .bind(since24)
+      .bind(sinceTokens)
       .first<{ i: number; o: number }>();
     return {
       windows,

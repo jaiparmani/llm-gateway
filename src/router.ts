@@ -452,7 +452,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
     // below share the same snapshot; see insights.ts for the prompts.
     // Latency percentiles for the monitoring UI.
     if (path === "/v1/latency" && method === "GET") {
-      return json(await deps.store.latencyPercentiles(24));
+      const hours = Number(url.searchParams.get("hours") ?? 24) || 24;
+      return json(await deps.store.latencyPercentiles(hours));
     }
 
     if (path === "/v1/insights" && method === "POST") {
@@ -506,7 +507,8 @@ export async function handle(request: Request, deps: RouterDeps): Promise<Respon
 
     // ── dashboard ──────────────────────────────────────────────────────────
     if (path === "/v1/dashboard" && method === "GET") {
-      const metrics = await deps.store.dashboardMetrics();
+      const hours = url.searchParams.get("hours") ? Number(url.searchParams.get("hours")) : undefined;
+      const metrics = await deps.store.dashboardMetrics(hours);
       const keys = await deps.store.publicKeys();
       const pausedProviders = await deps.store.pausedProviders();
       const nowMs = Date.now();

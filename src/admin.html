@@ -112,6 +112,16 @@
   .filter-bar select.inp{min-width:100px}
   .pagination{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:12px;font-size:11px}
 
+  .tl-bar{display:flex;gap:2px;margin-bottom:16px}
+  .tl-bar button{padding:5px 12px;border-radius:6px;font:500 11px/1.4 var(--sans);color:var(--text-2);background:none;border:1px solid transparent;transition:background .1s,color .1s}
+  .tl-bar button:hover{background:var(--surface-2);color:var(--text)}
+  .tl-bar button[aria-current]{background:var(--accent-dim);color:var(--accent);border-color:var(--accent-2)}
+
+  .code-block{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font:11px/1.6 var(--mono);overflow-x:auto;white-space:pre;color:var(--text);margin-top:8px;position:relative}
+  .code-block .copy-btn{position:absolute;top:6px;right:6px;font:500 9px var(--sans);padding:3px 8px;border-radius:4px;background:rgba(128,128,128,.12);border:1px solid var(--border);color:var(--text-3);cursor:pointer}
+  .code-block .copy-btn:hover{color:var(--text);background:rgba(128,128,128,.2)}
+  .lang-tab{font:600 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:3px 6px;border-radius:4px;background:var(--accent-dim);color:var(--accent);margin-bottom:6px;display:inline-block}
+
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
   @media(max-width:1100px){.three-col{grid-template-columns:1fr 1fr}}
@@ -167,6 +177,7 @@
 
   let token = localStorage.getItem("gw.token") || "";
   let providers = [];
+  let timelineHours = 24;
 
   function ago(isoStr) {
     if (!isoStr) return "never";
@@ -294,10 +305,17 @@
           <input type="checkbox" id="autoToggle" checked> Auto 30s
         </label>
       </div>
+      <div class="tl-bar" id="timelineBar">
+        <button data-hours="4">4h</button>
+        <button data-hours="24" aria-current="true">24h</button>
+        <button data-hours="168">7d</button>
+        <button data-hours="720">30d</button>
+        <button data-hours="87600">All time</button>
+      </div>
       <div class="metrics-grid" id="conMetrics"></div>
       <div class="three-col">
         <div>
-          <div class="card"><p class="label">Latency 24h</p>
+          <div class="card"><p class="label">Latency <span id="latPeriod">24h</span></p>
             <div class="grid" id="latGrid" style="margin-bottom:10px"></div>
             <div id="latBars"></div>
             <div id="latSpark" style="margin-top:8px"></div>
@@ -344,6 +362,12 @@
       </div>`;
     $("#conRefresh").onclick = () => refreshConsole();
     $("#autoToggle").onchange = () => startAutoRefresh();
+    $$("#timelineBar button").forEach((b) => (b.onclick = () => {
+      timelineHours = Number(b.dataset.hours);
+      $$("#timelineBar button").forEach((x) => x.removeAttribute("aria-current"));
+      b.setAttribute("aria-current", "true");
+      refreshConsole(); reqOffset = 0; loadRequests();
+    }));
     startAutoRefresh();
     await refreshConsole();
     reqOffset = 0;
@@ -353,12 +377,15 @@
   async function refreshConsole() {
     if (!token) return;
     try {
+      const h = timelineHours;
+      const costDays = Math.max(1, Math.ceil(h / 24));
       const [dash, keysData, latency, limits, reliability, usage, costP, costC] = await Promise.all([
-        api("/v1/dashboard"), api("/v1/keys"), api("/v1/latency"), api("/v1/limits"),
+        api("/v1/dashboard?hours=" + h), api("/v1/keys"), api("/v1/latency?hours=" + h), api("/v1/limits"),
         api("/v1/reliability"), api("/v1/usage?limit=50"),
-        api("/v1/analytics/cost?group_by=provider"), api("/v1/analytics/cost?group_by=client")
+        api("/v1/analytics/cost?group_by=provider&days=" + costDays), api("/v1/analytics/cost?group_by=client&days=" + costDays)
       ]);
       renderMetrics(dash, keysData, limits);
+      const lp = $("#latPeriod"); if (lp) lp.textContent = h >= 87600 ? "all" : h < 24 ? h + "h" : h <= 720 ? Math.round(h / 24) + "d" : "all";
       renderLatency(latency);
       renderRateLimits(keysData.queue);
       renderReliability(reliability);
@@ -554,6 +581,7 @@
     const fc = el.querySelector?.("[data-f=client]")?.value; if (fc) params.set("client", fc);
     const fp = el.querySelector?.("[data-f=provider]")?.value; if (fp) params.set("provider", fp);
     const fs = el.querySelector?.("[data-f=status]")?.value; if (fs) params.set("status", fs);
+    if (timelineHours < 87600) params.set("from", new Date(Date.now() - timelineHours * 3_600_000).toISOString());
     params.set("limit", "30"); params.set("offset", String(reqOffset));
     try {
       const data = await api("/v1/requests?" + params);
@@ -735,6 +763,60 @@
               <div id="dataChatLog"></div>
               <div class="row" style="margin-top:6px"><input id="dataChatInput" class="inp grow" autocomplete="off" placeholder="Which provider failed the most?"><button class="btn primary" id="dataChatSend" style="font-size:10px">Ask</button></div>
               <div class="dim" id="dataChatStatus" style="margin-top:4px"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <p class="label">Integration examples</p>
+          <p class="hint">Use your gateway base URL and a client token issued above. The gateway is OpenAI-compatible — drop it into any SDK by changing the base URL and key.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div>
+              <span class="lang-tab">Python (OpenAI SDK)</span>
+              <div class="code-block" id="ex-python">from openai import OpenAI
+
+client = OpenAI(
+    base_url="${location.origin}/v1",
+    api_key="lgw_YOUR_CLIENT_TOKEN",
+)
+
+resp = client.chat.completions.create(
+    model="",  # blank = gateway default
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(resp.choices[0].message.content)<button class="btn copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.textContent.replace('Copy','').trim());this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+            </div>
+            <div>
+              <span class="lang-tab">JavaScript (fetch)</span>
+              <div class="code-block" id="ex-js">const res = await fetch("${location.origin}/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer lgw_YOUR_CLIENT_TOKEN",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    messages: [{ role: "user", content: "Hello" }],
+    stream: true,
+  }),
+});
+// res.body is an SSE stream<button class="btn copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.textContent.replace('Copy','').trim());this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+            </div>
+            <div>
+              <span class="lang-tab">cURL</span>
+              <div class="code-block" id="ex-curl">curl ${location.origin}/v1/chat/completions \\
+  -H "Authorization: Bearer lgw_YOUR_CLIENT_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages":[{"role":"user","content":"Hello"}]}'<button class="btn copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.textContent.replace('Copy','').trim());this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+            </div>
+            <div>
+              <span class="lang-tab">Environment variables</span>
+              <div class="code-block" id="ex-env"># Works with any OpenAI-compatible app
+LLM_GATEWAY_URL=${location.origin}/v1
+LLM_GATEWAY_API_KEY=lgw_YOUR_CLIENT_TOKEN
+LLM_GATEWAY_PROTOCOL=openai
+
+# Or as direct OpenAI env vars
+OPENAI_BASE_URL=${location.origin}/v1
+OPENAI_API_KEY=lgw_YOUR_CLIENT_TOKEN<button class="btn copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.textContent.replace('Copy','').trim());this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
             </div>
           </div>
         </div>`;
